@@ -65,7 +65,7 @@ describe("TranzmitProvider", () => {
 
     await waitFor(() => expect(getByText("ready")).toBeTruthy());
     expect(fetch).toHaveBeenCalledWith(
-      "https://tranzmit-api-production.up.railway.app/v1/config",
+      "https://api-production-2146.up.railway.app/v1/config",
       expect.objectContaining({ method: "POST" })
     );
   });

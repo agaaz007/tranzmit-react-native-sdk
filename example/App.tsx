@@ -38,7 +38,6 @@ function DemoControls() {
           productId: product.id,
           ...priceForConversion(product.price),
         });
-        result.dismiss();
       },
       onDismiss: () => record("Paywall dismissed"),
       onFallback: openFallback,
