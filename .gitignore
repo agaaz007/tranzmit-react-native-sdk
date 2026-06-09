@@ -1,0 +1,12 @@
+node_modules/
+dist/
+packages/*/dist/
+*.tsbuildinfo
+.env
+.env.*
+.DS_Store
+.expo/
+.web-build/
+build/
+coverage/
+.gstack/

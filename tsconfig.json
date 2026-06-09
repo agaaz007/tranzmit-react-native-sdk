@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "sourceMap": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@tranzmit/shared": ["packages/shared/src/index.ts"]
+    },
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": [
+    "packages/shared/src/**/*.ts",
+    "packages/react-native/src/**/*.ts",
+    "packages/react-native/src/**/*.tsx"
+  ],
+  "exclude": ["node_modules", "dist", "example"]
+}

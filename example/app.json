@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Tranzmit React Native SDK Harness",
+    "slug": "tranzmit-react-native-sdk-harness",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true
+  }
+}
