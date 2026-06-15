@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Linking, PixelRatio, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
-import type { PaywallSpec, ProductSpec } from "@tranzmit/shared";
-import type { PresentationMode } from "../types.js";
+import { verifyDocumentIntegrity, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
+import type { PaywallUserContext, PresentationMode } from "../types.js";
 
 let useSafeAreaInsets: undefined | (() => { top: number; bottom: number; left: number; right: number });
 try {
@@ -14,6 +14,7 @@ try {
 export interface SpecRendererProps {
   spec: PaywallSpec;
   presentation?: PresentationMode;
+  user?: PaywallUserContext;
   onCTA: (product: ProductSpec) => void;
   onDismiss: () => void;
   onError?: (error: Error) => void;
@@ -22,6 +23,7 @@ export interface SpecRendererProps {
 export function SpecRenderer({
   spec,
   presentation = "sheet",
+  user,
   onCTA,
   onDismiss,
   onError,
@@ -33,7 +35,19 @@ export function SpecRenderer({
     () => viewportFromNativeLayout(presentation, windowSize, layout, insets),
     [insets.bottom, insets.left, insets.right, insets.top, layout, presentation, windowSize.height, windowSize.width],
   );
-  const html = useMemo(() => composeDocument(spec, presentation, viewport), [presentation, spec, viewport]);
+  const validationError = useMemo(() => validateRenderableSpec(spec), [spec]);
+  const html = useMemo(
+    () => validationError ? "" : composeDocument(spec, presentation, viewport, user),
+    [presentation, spec, user, validationError, viewport]
+  );
+
+  useEffect(() => {
+    if (validationError) onError?.(validationError);
+  }, [onError, validationError]);
+
+  if (validationError) {
+    return null;
+  }
 
   const handleMessage = (event: WebViewMessageEvent) => {
     const raw = event.nativeEvent.data;
@@ -43,6 +57,7 @@ export function SpecRenderer({
     } catch {
       return;
     }
+    if (!isPlainObject(message)) return;
 
     const type = String(message.type || message.action || "");
     if (!isAllowed(spec, type)) return;
@@ -59,14 +74,18 @@ export function SpecRenderer({
     }
 
     if (type === "open_url" && typeof message.url === "string") {
-      void Linking.openURL(message.url);
+      if (isAllowedExternalUrl(spec, message.url)) {
+        void Linking.openURL(message.url);
+      }
     }
   };
 
   const shouldStart = (request: WebViewNavigation) => {
     const url = request.url || "";
-    if (url.startsWith("about:") || url.startsWith("data:")) return true;
-    handleMessage({ nativeEvent: { data: JSON.stringify({ type: "open_url", url }) } } as WebViewMessageEvent);
+    if (isInternalWebViewUrl(url) || isAllowedWebViewOrigin(spec, url)) return true;
+    if (isAllowedExternalUrl(spec, url)) {
+      void Linking.openURL(url);
+    }
     return false;
   };
 
@@ -96,10 +115,18 @@ export function SpecRenderer({
       }}
     >
       <WebView
-        originWhitelist={["*"]}
+        originWhitelist={originWhitelist(spec)}
         source={{ html, baseUrl: spec.document?.baseUrl }}
         javaScriptEnabled
+        javaScriptCanOpenWindowsAutomatically={false}
         domStorageEnabled={false}
+        thirdPartyCookiesEnabled={false}
+        sharedCookiesEnabled={false}
+        setSupportMultipleWindows={false}
+        allowFileAccess={false}
+        allowFileAccessFromFileURLs={false}
+        allowUniversalAccessFromFileURLs={false}
+        mixedContentMode="never"
         onMessage={handleMessage}
         onError={handleRenderError}
         onHttpError={handleRenderError}
@@ -144,7 +171,7 @@ function productFromMessage(spec: PaywallSpec, message: Record<string, unknown>)
     : typeof message.product_id === "string"
       ? message.product_id
       : undefined;
-  if (!productId) return undefined;
+  if (!productId || productId.length > 256) return undefined;
   return spec.products.find((product) => product.id === productId);
 }
 
@@ -155,6 +182,76 @@ function isAllowed(spec: PaywallSpec, type: string) {
     return ["cta", "dismiss", "custom_action", "open_url"].includes(type);
   }
   return allowed.includes(type as any);
+}
+
+function validateRenderableSpec(spec: PaywallSpec): Error | null {
+  if (spec.bridge && spec.bridge.version !== 1) {
+    return new Error("Unsupported Tranzmit paywall bridge version");
+  }
+  if (!Array.isArray(spec.products) || spec.products.length === 0) {
+    return new Error("Tranzmit paywall has no products");
+  }
+  if (spec.document?.url && !spec.document.html) {
+    return new Error("Hosted Tranzmit paywall document was not hydrated");
+  }
+  if (spec.document?.html && spec.document.integrity) {
+    const result = verifyDocumentIntegrity(spec.document, spec.document.html);
+    if (!result.ok) return new Error(result.failure.message);
+  }
+  return null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isInternalWebViewUrl(url: string): boolean {
+  return url.startsWith("about:") || url.startsWith("data:text/html");
+}
+
+function originWhitelist(spec: PaywallSpec): string[] {
+  const origins = new Set(["about:blank"]);
+  const baseOrigin = originOf(spec.document?.baseUrl);
+  if (baseOrigin) origins.add(baseOrigin);
+  for (const origin of spec.security?.allowedOrigins || []) {
+    const normalized = originOf(origin);
+    if (normalized) origins.add(normalized);
+  }
+  return Array.from(origins);
+}
+
+function isAllowedWebViewOrigin(spec: PaywallSpec, url: string): boolean {
+  const origin = originOf(url);
+  if (!origin) return false;
+  return originWhitelist(spec).includes(origin);
+}
+
+function isAllowedExternalUrl(spec: PaywallSpec, url: string): boolean {
+  const parsed = parseUrl(url);
+  if (!parsed) return false;
+  const schemes = spec.security?.externalUrlSchemes || ["https"];
+  if (!schemes.includes(parsed.protocol.replace(":", ""))) return false;
+  const allowedHosts = spec.security?.externalUrlHosts || [];
+  return allowedHosts.includes(parsed.hostname);
+}
+
+function originOf(url: string | undefined): string | null {
+  const parsed = parseUrl(url);
+  return parsed?.origin || null;
+}
+
+function parseUrl(url: string | undefined): { protocol: string; hostname: string; origin: string } | null {
+  if (!url) return null;
+  const match = url.match(/^([a-z][a-z0-9+.-]*:)?\/\/([^/?#]+)(?:[/?#]|$)/i);
+  if (!match || !match[1]) return null;
+  const protocol = match[1].toLowerCase();
+  const hostname = match[2].split("@").pop()?.split(":")[0]?.toLowerCase();
+  if (!hostname) return null;
+  return {
+    protocol,
+    hostname,
+    origin: `${protocol}//${match[2].toLowerCase()}`,
+  };
 }
 
 export interface PaywallViewportContract {
@@ -173,22 +270,44 @@ export function composeDocumentForTest(
   spec: PaywallSpec,
   presentation: PresentationMode = "sheet",
   viewport?: PaywallViewportContract,
+  user?: PaywallUserContext,
 ) {
-  return composeDocument(spec, presentation, viewport);
+  return composeDocument(spec, presentation, viewport, user);
 }
 
-function composeDocument(spec: PaywallSpec, presentation: PresentationMode, viewport?: PaywallViewportContract) {
+function composeDocument(
+  spec: PaywallSpec,
+  presentation: PresentationMode,
+  viewport?: PaywallViewportContract,
+  user?: PaywallUserContext,
+) {
   const document = spec.document || legacyDocument(spec);
   const js = document.js ? `<script>${document.js}</script>` : "";
   const presentationClass = `tz-presentation-${presentation}`;
   const resolvedViewport = viewport || fallbackViewport(presentation);
   const viewportJson = JSON.stringify(resolvedViewport).replace(/</g, "\\u003c");
+  const sanitizedUser = sanitizeUserContext(user);
+  const userJson = JSON.stringify(sanitizedUser).replace(/</g, "\\u003c");
+  const documentHtml = bakePersonalizedSources(document.html || "", sanitizedUser);
   const viewportCss = viewportCssVariables(resolvedViewport);
   return `<!doctype html>
 <html class="${presentationClass}" data-tranzmit-presentation="${presentation}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<script>
+window.TranzmitImageFallback = function(node){
+  try {
+    if (!node || !node.getAttribute) return;
+    var fallback = node.getAttribute('data-tranzmit-fallback-src');
+    node.onerror = null;
+    node.removeAttribute('onerror');
+    if (fallback && node.getAttribute('src') !== fallback) {
+      node.setAttribute('src', fallback);
+    }
+  } catch (_) {}
+};
+</script>
 <style>
   :root {
 ${viewportCss}
@@ -320,22 +439,49 @@ ${viewportCss}
 </style>
 </head>
 <body class="${presentationClass}">
-${document.html}
+${documentHtml}
 ${js}
 <script>window.TranzmitNativeViewport = ${viewportJson};</script>
+<script>window.TranzmitUser = ${userJson};</script>
 <script>
 (function(){
   var viewport = window.TranzmitNativeViewport || null;
+  var user = window.TranzmitUser || {};
   function post(message){
     try { window.ReactNativeWebView.postMessage(JSON.stringify(message)); } catch (_) {}
   }
+  function fillTemplate(template){
+    return String(template).replace(/\\{(\\w+)\\}/g, function(match, key){
+      var value = user[key];
+      return value == null ? '' : encodeURIComponent(String(value));
+    });
+  }
+  function resolvePersonalizedSources(){
+    var nodes = document.querySelectorAll('[data-tranzmit-src]');
+    for (var i = 0; i < nodes.length; i++){
+      var template = nodes[i].getAttribute('data-tranzmit-src');
+      if (template) nodes[i].setAttribute('src', fillTemplate(template));
+    }
+    var fallbackNodes = document.querySelectorAll('[data-tranzmit-fallback-src]');
+    for (var j = 0; j < fallbackNodes.length; j++){
+      var node = fallbackNodes[j];
+      var resolvedFallback = fillTemplate(node.getAttribute('data-tranzmit-fallback-src') || '');
+      node.setAttribute('data-tranzmit-fallback-src', resolvedFallback);
+      if (!node.onerror) {
+        node.onerror = function(){ window.TranzmitImageFallback && window.TranzmitImageFallback(this); };
+      }
+    }
+  }
   window.Tranzmit = {
     viewport: viewport,
+    user: user,
     post: post,
+    fillTemplate: fillTemplate,
     cta: function(productId){ post({ type: 'cta', productId: productId }); },
     dismiss: function(){ post({ type: 'dismiss' }); },
     customAction: function(name, payload){ post({ type: 'custom_action', name: name, payload: payload || {} }); }
   };
+  resolvePersonalizedSources();
   document.addEventListener('click', function(event){
     var node = event.target;
     while (node && node !== document) {
@@ -477,6 +623,46 @@ function priceText(product: ProductSpec) {
   const amount = typeof price.amount === "number" ? (price.amount / 100).toFixed(2) : "";
   const interval = price.interval ? ` / ${price.interval}` : "";
   return `${price.currency} ${amount}${interval}`.trim();
+}
+
+function sanitizeUserContext(user?: PaywallUserContext): Record<string, string> {
+  if (!user) return {};
+  const out: Record<string, string> = {};
+  for (const key of ["id", "userId", "stableID"] as const) {
+    const value = user[key];
+    if (typeof value === "string" && value) out[key] = value;
+  }
+  return out;
+}
+
+function fillTemplateString(template: string, user: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_match, key: string) => {
+    const value = user[key];
+    return value == null ? "" : encodeURIComponent(String(value));
+  });
+}
+
+/**
+ * Resolves personalization templates at compose time (in React Native, before
+ * the WebView parses the markup):
+ *
+ * 1. `data-tranzmit-src` tokens are resolved into a baked `src` so the browser
+ *    preload scanner can start the image fetch at the earliest possible moment.
+ * 2. `data-tranzmit-fallback-src` tokens are resolved in place, and an inline
+ *    `onerror` handler is attached so a failed load swaps to the fallback image.
+ *
+ * The WebView bridge also re-resolves these at runtime, which covers any nodes
+ * a hosted paywall inserts dynamically.
+ */
+function bakePersonalizedSources(html: string, user: Record<string, string>): string {
+  return html
+    .replace(/data-tranzmit-src=("|')([\s\S]*?)\1/g, (match, quote: string, template: string) => {
+      return `${match} src=${quote}${fillTemplateString(template, user)}${quote}`;
+    })
+    .replace(/data-tranzmit-fallback-src=("|')([\s\S]*?)\1/g, (_match, quote: string, template: string) => {
+      const resolved = fillTemplateString(template, user);
+      return `data-tranzmit-fallback-src=${quote}${resolved}${quote} onerror=${quote}window.TranzmitImageFallback&&window.TranzmitImageFallback(this)${quote}`;
+    });
 }
 
 function escapeHtml(value: string) {

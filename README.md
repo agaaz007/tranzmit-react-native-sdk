@@ -17,7 +17,9 @@ To integrate Tranzmit, a customer app needs:
 
 Once the public key and placement are configured in the dashboard, paywall changes and experiment splits flow remotely. The customer should not hardcode paywall UI in their app.
 
-Tranzmit does **not** process purchases. Tranzmit owns paywall presentation and analytics. The customer app owns billing, entitlements, refunds, restore purchases, and subscription-provider integration.
+Tranzmit does **not** process purchases. Tranzmit owns paywall presentation, experimentation, and analytics. The customer app owns billing, entitlements, refunds, restore purchases, and subscription-provider integration.
+
+The billing provider is the source of truth for prices, free trials, subscription periods, eligibility, and final checkout terms. Dashboard product fields are paywall presentation data and must stay aligned with StoreKit, Google Play Billing, RevenueCat, Razorpay, Stripe, or the customer backend. At checkout time, the host app must use `product.id` to start billing and must trust the billing provider's returned product details over dashboard copy.
 
 ## Client Integration Steps
 
@@ -51,6 +53,8 @@ Examples:
 This value is saved as `spec.products[0].id`. When the user taps the hosted paywall CTA, the React Native SDK receives the matching `ProductSpec` and passes it to the host app as `product.id`.
 
 If the dashboard product ID does not match the billing provider, the paywall can still open, but the app may start the wrong plan or fail to start checkout.
+
+Only the product identifier is authoritative in Tranzmit. Product titles, display prices, trial labels, and billing periods should either be generated from the billing provider upstream or treated as display copy that QA must compare against the provider's checkout sheet.
 
 ### Step 3: Add The React Native Dependency
 
@@ -200,7 +204,7 @@ Replace `upgrade_pro` with the dashboard trigger if Tranzmit supplied a differen
 
 ### Step 8: Fallback To The Existing App Paywall
 
-Always wire `onFallback` to the app's current paywall. That keeps monetization available if Tranzmit config is still loading, the placement is missing or disabled, or the WebView renderer reports an error.
+Always wire `onFallback` to the app's current paywall. That keeps monetization available if Tranzmit config is still loading, the placement is missing or disabled, integrity validation fails, the paywall definition is invalid, the bridge version is unsupported, or the WebView renderer reports an error.
 
 ```tsx
 const result = gate("upgrade_pro", {
@@ -218,9 +222,12 @@ if (!result.shown) {
 
 Fallback reasons:
 
-1. `not_ready`: the SDK has not loaded a valid config yet.
+1. `not_ready`: the SDK has not loaded a valid config yet. This includes no network connectivity, configuration fetch failures, and startup before cache/network init completes.
 2. `placement_not_found`: the trigger has no enabled placement in config.
-3. `render_error`: the hosted document or WebView failed after showing began.
+3. `integrity_failed`: the hosted document did not match its SHA-256 integrity metadata.
+4. `invalid_paywall`: the placement has no renderable document or products.
+5. `unsupported_version`: the placement uses an unsupported WebView bridge version.
+6. `render_error`: the hosted document or WebView failed after showing began.
 
 ### Step 9: Keep Billing In The Host App
 
@@ -228,12 +235,14 @@ When the paywall CTA is tapped:
 
 1. Read `product.id`; this is the dashboard **Billing Product ID**.
 2. Start the app's native purchase flow using `product.id`.
-3. Wait for the purchase provider to confirm success.
+3. Let the billing provider return the authoritative localized title, price, free trial, billing period, and checkout terms.
 4. Grant the entitlement in the app's existing entitlement system.
 5. Call `reportConversion()` only after the purchase succeeds.
 6. In the provider-driven `gate()` flow, the SDK dismisses the paywall before `onCTA` runs. If you render `TranzmitPaywall` declaratively, hide your own `visible` state after checkout or cancellation.
 
 Tranzmit does not call StoreKit, Google Play Billing, RevenueCat, Razorpay, Stripe, restore purchases, or grant entitlements.
+
+Do not use dashboard price strings as the billing source of truth. If the hosted paywall displays prices or trial language, QA must verify that the visible copy matches the provider checkout for every locale and product.
 
 For Razorpay, put the checkout flow inside `onCTA`. The SDK callback is the handoff point from the hosted paywall to the customer app:
 
@@ -311,9 +320,11 @@ Run this QA checklist before shipping:
 6. Call `gate('upgrade_pro')` and confirm the remote WebView paywall renders.
 7. Tap the CTA and confirm the host purchase flow starts for the matching billing product.
 8. Complete a test purchase and confirm `reportConversion()` runs only after success.
-9. Change paywall copy, product ID, or variants in the Tranzmit dashboard.
-10. Call `await refreshConfig()` in QA.
-11. Present the paywall again and confirm the dashboard change appears.
+9. Confirm the checkout sheet price, free trial, and billing period match the paywall copy.
+10. Temporarily return a hosted document with a bad `sha256` integrity value and confirm fallback opens instead of rendering.
+11. Change paywall copy, product ID, or variants in the Tranzmit dashboard.
+12. Call `await refreshConfig()` in QA.
+13. Present the paywall again and confirm the dashboard change appears.
 
 ### Step 13: AI Agent Acceptance Criteria
 
@@ -426,13 +437,19 @@ Important fields passed to `onCTA(product)`:
 | `id` | Billing Product ID from the Tranzmit dashboard. Use this for native billing. |
 | `name` | Product display name. |
 | `description` | Optional product copy. |
-| `price` | Either a formatted string or `{ amount, currency, interval? }`. |
+| `price` | Display copy from Tranzmit. The billing provider remains authoritative for checkout price, trial, and period. |
 | `metadata` | Optional dashboard metadata. |
 
 ### `FallbackEvent`
 
 ```ts
-type FallbackReason = "not_ready" | "placement_not_found" | "render_error";
+type FallbackReason =
+  | "not_ready"
+  | "placement_not_found"
+  | "render_error"
+  | "integrity_failed"
+  | "invalid_paywall"
+  | "unsupported_version";
 
 interface FallbackEvent {
   trigger: string;
@@ -442,6 +459,90 @@ interface FallbackEvent {
   variantId?: string;
 }
 ```
+
+## Paywall Security
+
+Hosted WebView documents fail closed before rendering:
+
+1. Hosted document responses must include config-side SHA-256 integrity metadata in `spec.document.integrity`.
+2. The SDK downloads the hosted HTML payload, computes SHA-256, and compares it with the configured integrity value.
+3. If integrity is missing, unsupported, or mismatched, the SDK does not cache or render the document.
+4. Provider-driven `gate()` calls surface `integrity_failed` through `onFallback` when the readiness failure is caused by integrity validation. The provider `onError` also receives a `TranzmitError` with code `paywall_integrity_failed`.
+
+WebView capabilities are intentionally narrow:
+
+1. JavaScript is enabled because hosted paywalls use the Tranzmit bridge.
+2. DOM storage, file access, universal file URL access, mixed content, third-party cookies, shared cookies, and automatic JS windows are disabled.
+3. Top-level navigation is limited to inline document URLs and exact `security.allowedOrigins`.
+4. `postMessage` payloads must be JSON objects with allowed bridge actions.
+5. CTA messages can only select products already present in `spec.products`.
+6. External URL opens are blocked unless the spec sets `security.externalUrlHosts`; allowed schemes default to `https`.
+
+CTA taps are callbacks into React Native. Hosted paywalls should not redirect to Razorpay, Stripe, StoreKit, Play Billing, `about:blank`, or arbitrary checkout pages.
+
+## Personalized Paywall Resources
+
+Hosted paywalls can render per-user resources (for example a personalized hero image served from your own API) without breaking document integrity. The SDK exposes the resolved user identity to the WebView and resolves URL templates at runtime, so the hosted HTML stays static and hash-stable.
+
+The bridge injects `window.Tranzmit.user`:
+
+```ts
+window.Tranzmit.user = {
+  id?: string;       // resolved id: userId when logged in, otherwise stableID
+  userId?: string;   // app-provided user id, present only for logged-in users
+  stableID?: string; // SDK-generated anonymous id
+};
+```
+
+Only these resolved id fields are exposed. Traits, private traits, and the raw identifier map are not sent into the WebView.
+
+Add a `data-tranzmit-src` attribute with `{token}` placeholders:
+
+```html
+<img data-tranzmit-src="https://api.yourapp.com/paywall-image?uid={userId}" alt="" />
+```
+
+Available tokens are `{id}`, `{userId}`, and `{stableID}`. Unknown or missing values resolve to an empty string. You can also call `window.Tranzmit.fillTemplate("...{id}...")` directly from your paywall JS.
+
+### Fallback image
+
+Add `data-tranzmit-fallback-src` to supply a default image that is shown if the personalized image fails to load (network error, 404, missing user, etc.):
+
+```html
+<img
+  data-tranzmit-src="https://api.yourapp.com/paywall-image?uid={userId}"
+  data-tranzmit-fallback-src="https://cdn.yourapp.com/paywall/default.png"
+  alt=""
+/>
+```
+
+How it works:
+
+1. The SDK wires an `onerror` handler at compose time. On the first load failure it swaps `src` to the resolved `data-tranzmit-fallback-src` value.
+2. The fallback URL also supports `{id}` / `{userId}` / `{stableID}` tokens.
+3. The handler clears itself before swapping, so if the fallback also fails there is no retry loop. Use a reliably available URL for the fallback (for example a CDN asset, not another personalized endpoint).
+4. The fallback is opt-in per image. Images without `data-tranzmit-fallback-src` are left untouched on error.
+
+### Latency
+
+The SDK composes the WebView document on-device with the user context already in hand, so it resolves `data-tranzmit-src` into a real `src` **before** the markup reaches the WebView. The image fetch therefore starts as soon as the tag is parsed (preload-scanner friendly), with no WebView-side JavaScript on the critical path. The bridge also re-resolves these templates at runtime, which covers nodes a hosted paywall inserts dynamically.
+
+Notes:
+
+1. Personalization has no measurable latency cost. Token substitution is a microsecond-scale string replace; the only real cost is the network fetch of the image itself, which is identical however the `src` is set. Integrity validation is a one-time hash of the document at config-load time and does not run per image or at render time.
+2. Because only the id value is substituted and the host is baked into the integrity-checked document, the document hash does not change per user, so caching and integrity both hold.
+3. `<img>` loads are subresources and do not require CORS on your API. They must be HTTPS (`mixedContentMode` is `never`).
+4. If you need the backend to choose the entire URL, your paywall JS can `fetch()` your API for the URL, but that path requires your API to send `Access-Control-Allow-Origin` because the WebView origin is `about:blank`.
+
+## Versioning And Releases
+
+The SDK follows semantic versioning for published npm packages:
+
+1. Patch releases fix bugs, security hardening, and documentation without changing public APIs.
+2. Minor releases add backwards-compatible APIs, renderer capabilities, or optional spec fields.
+3. Major releases are reserved for breaking public API changes, unsupported bridge version removals, or migration-required behavior changes.
+
+Every published release should update `CHANGELOG.md` with customer-visible changes, migration notes for breaking changes, and any security or fallback behavior changes. Because Tranzmit sits in revenue-critical flows, customer apps should pin a tested version and upgrade through their normal purchase-flow QA checklist.
 
 ## Local Development
 

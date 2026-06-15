@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sha256Integrity } from "@tranzmit/shared";
 import { TranzmitProvider, useTranzmit } from "../src/index.js";
 import { mockConfig } from "./fixtures.js";
 
@@ -155,6 +156,7 @@ describe("TranzmitProvider", () => {
   });
 
   it("hydrates hosted WebView documents before rendering", async () => {
+    const hostedHtml = "<main><h1>Hosted Upgrade</h1><button data-tranzmit-action=\"cta\" data-product-id=\"pro_monthly\">Buy Hosted</button></main>";
     const hostedConfig = {
       ...mockConfig,
       placements: {
@@ -165,6 +167,7 @@ describe("TranzmitProvider", () => {
             cacheKey: "hosted:test-1",
             document: {
               url: "https://example.test/v1/paywall-documents/pl_1/var_a/hosted%3Atest-1.json?key=pk_test_demo",
+              integrity: sha256Integrity(hostedHtml),
             },
           },
         },
@@ -177,11 +180,10 @@ describe("TranzmitProvider", () => {
           return {
             ok: true,
             headers: { get: () => "application/json" },
-            json: () => Promise.resolve({
-              html: "<main><h1>Hosted Upgrade</h1><button data-tranzmit-action=\"cta\" data-product-id=\"pro_monthly\">Buy Hosted</button></main>",
+            text: () => Promise.resolve(JSON.stringify({
+              html: hostedHtml,
               css: "body{font-family:sans-serif}",
-              integrity: "sha256-test",
-            }),
+            })),
           };
         }
         return {
@@ -204,6 +206,54 @@ describe("TranzmitProvider", () => {
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/v1/paywall-documents/"),
     );
+  });
+
+  it("rejects hosted WebView documents with invalid integrity", async () => {
+    const hostedConfig = {
+      ...mockConfig,
+      placements: {
+        upgrade_pro: {
+          ...mockConfig.placements.upgrade_pro,
+          spec: {
+            ...mockConfig.placements.upgrade_pro.spec,
+            document: {
+              url: "https://example.test/v1/paywall-documents/pl_1/var_a/bad.json?key=pk_test_demo",
+              integrity: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            },
+          },
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/v1/paywall-documents/")) {
+          return {
+            ok: true,
+            headers: { get: () => "application/json" },
+            text: () => Promise.resolve(JSON.stringify({
+              html: "<main><h1>Tampered Upgrade</h1></main>",
+            })),
+          };
+        }
+        return {
+          ok: true,
+          json: () => Promise.resolve(hostedConfig),
+        };
+      })
+    );
+    const onError = vi.fn();
+
+    render(
+      <TranzmitProvider publicKey="pk_test_demo" apiBaseUrl="https://example.test" onError={onError}>
+        <GateHarness />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      code: "paywall_integrity_failed",
+      message: "Paywall document integrity validation failed",
+    })));
   });
 
   it("calls fallback when the WebView renderer fails", async () => {

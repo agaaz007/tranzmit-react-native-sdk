@@ -2,6 +2,7 @@ import type { PlatformAdapter, PlatformMetadata } from "./adapter.js";
 import type { ConfigResponse, PlacementConfig } from "./config.js";
 import type { TranzmitIdentity } from "./identity.js";
 import { hashString, resolveIdentity, stableJson } from "./identity.js";
+import { PaywallIntegrityError, assertDocumentIntegrity } from "./integrity.js";
 
 export const DEFAULT_API_BASE_URL = "https://api-production-2146.up.railway.app";
 
@@ -117,7 +118,7 @@ export function createTranzmitClient(
       await setCachedConfig(adapter, config, identity, fresh);
       track("page_view");
     } catch (err: any) {
-      const error = makeError("config_fetch_failed", err?.message || "Config fetch failed", true);
+      const error = makeError(configErrorCode(err, "config_fetch_failed"), err?.message || "Config fetch failed", true);
       config.onError?.(error);
       initPromise = null;
       currentInitKey = null;
@@ -133,7 +134,7 @@ export function createTranzmitClient(
       await setCachedConfig(adapter, config, identity, fresh);
     } catch (err: any) {
       config.onError?.(
-        makeError("config_refresh_failed", err?.message || "Config refresh failed", true)
+        makeError(configErrorCode(err, "config_refresh_failed"), err?.message || "Config refresh failed", true)
       );
     }
   }
@@ -148,7 +149,7 @@ export function createTranzmitClient(
       await setCachedConfig(adapter, currentConfig, currentIdentity, fresh);
     } catch (err: any) {
       currentConfig.onError?.(
-        makeError("config_refresh_failed", err?.message || "Config refresh failed", true)
+        makeError(configErrorCode(err, "config_refresh_failed"), err?.message || "Config refresh failed", true)
       );
       throw err;
     }
@@ -321,6 +322,7 @@ async function getCachedConfig(
     const cached = JSON.parse(raw) as { config: ConfigResponse; cachedAt: number };
     // Stale configs are still valuable offline. init() always refreshes in the
     // background when cache exists, so TTL controls freshness, not availability.
+    validateCachedPaywallDocuments(cached.config);
     return cached.config;
   } catch {
     return null;
@@ -388,7 +390,17 @@ async function hydratePaywallDocuments(config: ConfigResponse): Promise<void> {
     if (!placement) return;
     const spec = placement.spec;
     const document = spec.document;
-    if (!document?.url || document.html) return;
+    if (!document) {
+      throw new Error(`Paywall ${placement.trigger} is missing a WebView document`);
+    }
+    if (!document.url) {
+      if (document.html && document.integrity) assertDocumentIntegrity(document, document.html);
+      return;
+    }
+    if (document.html) {
+      assertDocumentIntegrity(document, document.html);
+      return;
+    }
 
     const response = await fetch(document.url);
     if (!response.ok) {
@@ -397,7 +409,7 @@ async function hydratePaywallDocuments(config: ConfigResponse): Promise<void> {
 
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
-      const payload = await response.json() as {
+      const payload = JSON.parse(await response.text()) as {
         html?: string;
         css?: string;
         js?: string;
@@ -405,22 +417,41 @@ async function hydratePaywallDocuments(config: ConfigResponse): Promise<void> {
         integrity?: string;
       };
       if (!payload.html) throw new Error("Paywall document payload is missing html");
-      spec.document = {
+      const hydrated = {
         ...document,
         html: payload.html,
         css: payload.css ?? document.css,
         js: payload.js ?? document.js,
         baseUrl: payload.baseUrl ?? document.baseUrl,
-        integrity: payload.integrity ?? document.integrity,
+        integrity: document.integrity,
       };
+      assertDocumentIntegrity(hydrated, payload.html);
+      spec.document = hydrated;
       return;
     }
 
+    const html = await response.text();
+    assertDocumentIntegrity(document, html);
     spec.document = {
       ...document,
-      html: await response.text(),
+      html,
     };
   }));
+}
+
+function validateCachedPaywallDocuments(config: ConfigResponse): void {
+  for (const placement of Object.values(config.placements || {})) {
+    if (!placement) continue;
+    const document = placement.spec.document;
+    if (!document?.html) continue;
+    if (document.url || document.integrity) {
+      assertDocumentIntegrity(document, document.html);
+    }
+  }
+}
+
+function configErrorCode(error: unknown, fallback: string): string {
+  return error instanceof PaywallIntegrityError ? "paywall_integrity_failed" : fallback;
 }
 
 function configStorageKey(config: InitConfig, identity: TranzmitIdentity): string {

@@ -7,6 +7,7 @@ export type {
   FallbackReason,
   GateOptions,
   GateResult,
+  PaywallUserContext,
   PresentationMode,
   ReportConversionData,
   TranzmitContextValue,

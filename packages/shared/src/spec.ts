@@ -44,6 +44,24 @@ export interface WebViewBridgeSpec {
   allowedActions?: Array<"cta" | "dismiss" | "custom_action" | "open_url">;
 }
 
+export interface WebViewSecuritySpec {
+  /**
+   * Origins the hosted paywall WebView may load. Inline HTML uses `about:blank`
+   * and does not require listing here. Use exact origins such as
+   * `https://paywalls.tranzmit.com`, not wildcard domains.
+   */
+  allowedOrigins?: string[];
+  /**
+   * External URL hosts the paywall may ask the host app to open. Empty means no
+   * external links can escape the WebView.
+   */
+  externalUrlHosts?: string[];
+  /**
+   * URL schemes allowed for external opens. Defaults to `https`.
+   */
+  externalUrlSchemes?: string[];
+}
+
 export type PaywallPresentationMode = "sheet" | "modal" | "fullscreen" | "inline";
 
 export interface PaywallDesignBreakpoint {
@@ -86,6 +104,7 @@ export interface PaywallSpec {
   design?: PaywallDesignDocument;
   document?: WebViewDocumentSpec;
   bridge?: WebViewBridgeSpec;
+  security?: WebViewSecuritySpec;
   header?: {
     title: string;
     subtitle?: string;

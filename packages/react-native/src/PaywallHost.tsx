@@ -2,22 +2,24 @@ import type { ProductSpec } from "@tranzmit/shared";
 import { SpecRenderer } from "./renderer/SpecRenderer.js";
 import { ModalPresenter } from "./presentation/ModalPresenter.js";
 import { SheetPresenter } from "./presentation/SheetPresenter.js";
-import type { ActivePaywall } from "./types.js";
+import type { ActivePaywall, PaywallUserContext } from "./types.js";
 
 export interface PaywallHostProps {
   activePaywalls: ActivePaywall[];
+  user?: PaywallUserContext;
   onCTA: (active: ActivePaywall, product: ProductSpec) => void;
   onDismiss: (active: ActivePaywall) => void;
   onError: (active: ActivePaywall, error: Error) => void;
 }
 
-export function PaywallHost({ activePaywalls, onCTA, onDismiss, onError }: PaywallHostProps) {
+export function PaywallHost({ activePaywalls, user, onCTA, onDismiss, onError }: PaywallHostProps) {
   return (
     <>
       {activePaywalls.map((active) => {
         const content = (
           <SpecRenderer
             spec={active.placement.spec}
+            user={user}
             onCTA={(product) => onCTA(active, product)}
             onDismiss={() => onDismiss(active)}
             onError={(error) => onError(active, error)}
@@ -26,7 +28,7 @@ export function PaywallHost({ activePaywalls, onCTA, onDismiss, onError }: Paywa
         );
 
         if (active.presentation === "inline") {
-          return <SpecRenderer key={active.id} spec={active.placement.spec} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
+          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
         }
 
         if (active.presentation === "modal") {

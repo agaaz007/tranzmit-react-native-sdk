@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
+import { Linking } from "react-native";
 import { composeDocumentForTest, SpecRenderer } from "../src/renderer/SpecRenderer.js";
 import { baseSpec } from "./fixtures.js";
 
@@ -36,6 +37,47 @@ describe("SpecRenderer", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("uses restricted WebView capabilities by default", () => {
+    const { getByTestId } = render(
+      <SpecRenderer spec={baseSpec} presentation="inline" onCTA={() => {}} onDismiss={() => {}} />
+    );
+
+    expect(getByTestId("tranzmit-webview-origin-whitelist").textContent).toBe("[\"about:blank\"]");
+    expect(getByTestId("tranzmit-webview-js-windows").textContent).toBe("false");
+    expect(getByTestId("tranzmit-webview-dom-storage").textContent).toBe("false");
+    expect(getByTestId("tranzmit-webview-file-access").textContent).toBe("false");
+    expect(getByTestId("tranzmit-webview-universal-file-access").textContent).toBe("false");
+    expect(getByTestId("tranzmit-webview-mixed-content").textContent).toBe("never");
+  });
+
+  it("only opens external URLs for allowlisted HTTPS hosts", () => {
+    const openURL = vi.spyOn(Linking, "openURL");
+    const spec = {
+      ...baseSpec,
+      document: {
+        html: `
+          <main>
+            <button data-tranzmit-action="open_url" data-url="https://billing.example.test/terms">Terms</button>
+            <button data-tranzmit-action="open_url" data-url="https://evil.example.test/terms">Blocked</button>
+          </main>
+        `,
+      },
+      security: {
+        externalUrlHosts: ["billing.example.test"],
+      },
+    };
+
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" onCTA={() => {}} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Terms"));
+    fireEvent.click(getByText("Blocked"));
+
+    expect(openURL).toHaveBeenCalledTimes(1);
+    expect(openURL).toHaveBeenCalledWith("https://billing.example.test/terms");
+  });
+
   it("injects presentation-aware fullscreen document styles", () => {
     const html = composeDocumentForTest(baseSpec, "fullscreen", {
       width: 412,
@@ -62,6 +104,104 @@ describe("SpecRenderer", () => {
     expect(html).toContain(".tz-presentation-fullscreen .tz-paywall:not(.phone) .tz-close");
     expect(html).toContain("display: none !important");
     expect(html).toContain("window.TranzmitNativeViewport");
+  });
+
+  it("injects the resolved user context and personalized-source bridge", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main><img data-tranzmit-src="https://cdn.example.test/u/{userId}.png" /></main>',
+        },
+      },
+      "inline",
+      undefined,
+      { id: "user-123", userId: "user-123", stableID: "trz_abc" },
+    );
+
+    expect(html).toContain('window.TranzmitUser = {"id":"user-123","userId":"user-123","stableID":"trz_abc"}');
+    expect(html).toContain("data-tranzmit-src");
+    expect(html).toContain("function fillTemplate(template)");
+    expect(html).toContain("resolvePersonalizedSources()");
+  });
+
+  it("bakes a resolved src into the markup at compose time", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main><img data-tranzmit-src="https://cdn.example.test/u/{userId}.png" /></main>',
+        },
+      },
+      "inline",
+      undefined,
+      { id: "user 123", userId: "user 123", stableID: "trz_abc" },
+    );
+
+    expect(html).toContain('src="https://cdn.example.test/u/user%20123.png"');
+    expect(html).toContain('data-tranzmit-src="https://cdn.example.test/u/{userId}.png"');
+  });
+
+  it("wires a fallback image and onerror handler for data-tranzmit-fallback-src", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main><img data-tranzmit-src="https://cdn.example.test/u/{userId}.png" data-tranzmit-fallback-src="https://cdn.example.test/default.png" /></main>',
+        },
+      },
+      "inline",
+      undefined,
+      { id: "user-123", userId: "user-123" },
+    );
+
+    expect(html).toContain("window.TranzmitImageFallback = function(node)");
+    expect(html).toContain('data-tranzmit-fallback-src="https://cdn.example.test/default.png"');
+    expect(html).toContain('onerror="window.TranzmitImageFallback&&window.TranzmitImageFallback(this)"');
+    expect(html).toContain('src="https://cdn.example.test/u/user-123.png"');
+  });
+
+  it("resolves tokens inside a personalized fallback image url", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main><img data-tranzmit-src="https://a.test/{userId}.png" data-tranzmit-fallback-src="https://a.test/anon/{stableID}.png" /></main>',
+        },
+      },
+      "inline",
+      undefined,
+      { id: "user-1", userId: "user-1", stableID: "trz_xyz" },
+    );
+
+    expect(html).toContain('data-tranzmit-fallback-src="https://a.test/anon/trz_xyz.png"');
+  });
+
+  it("bakes empty tokens when the matching identity field is absent", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main><img data-tranzmit-src="https://cdn.example.test/u/{userId}.png" /></main>',
+        },
+      },
+      "inline",
+      undefined,
+      { id: "trz_abc", stableID: "trz_abc" },
+    );
+
+    expect(html).toContain('src="https://cdn.example.test/u/.png"');
+  });
+
+  it("emits an empty user context when no identity is available", () => {
+    const html = composeDocumentForTest(baseSpec, "inline");
+    expect(html).toContain("window.TranzmitUser = {}");
+  });
+
+  it("omits missing identity fields from the injected user context", () => {
+    const html = composeDocumentForTest(baseSpec, "inline", undefined, { id: "trz_anon", stableID: "trz_anon" });
+    expect(html).toContain('window.TranzmitUser = {"id":"trz_anon","stableID":"trz_anon"}');
+    expect(html).not.toContain('"userId"');
   });
 
   it("does not flatten imported phone artboards with fullscreen overrides", () => {

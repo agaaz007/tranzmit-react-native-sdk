@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createTranzmitClient, type SharedClient } from "@tranzmit/shared";
+import { createTranzmitClient, type SharedClient, type TranzmitIdentity } from "@tranzmit/shared";
 import { reactNativeAdapter, reactNativeMetadata } from "./adapter.js";
 import { PaywallHost } from "./PaywallHost.js";
 import { TranzmitContext } from "./TranzmitContext.js";
@@ -7,7 +7,9 @@ import type {
   ActivePaywall,
   GateOptions,
   GateResult,
+  PaywallUserContext,
   ReportConversionData,
+  FallbackReason,
   TranzmitContextValue,
   TranzmitProviderProps,
 } from "./types.js";
@@ -28,7 +30,9 @@ export function TranzmitProvider({
   const clientRef = useRef<SharedClient | null>(null);
   const activeRef = useRef<Map<string, ActivePaywall>>(new Map());
   const [isReady, setIsReady] = useState(false);
+  const [readyError, setReadyError] = useState<Error | undefined>();
   const [activePaywalls, setActivePaywalls] = useState<ActivePaywall[]>([]);
+  const [userContext, setUserContext] = useState<PaywallUserContext | undefined>();
 
   if (!clientRef.current) {
     clientRef.current = createTranzmitClient(reactNativeAdapter, reactNativeMetadata);
@@ -54,6 +58,7 @@ export function TranzmitProvider({
     let cancelled = false;
     const client = clientRef.current!;
     setIsReady(false);
+    setReadyError(undefined);
     activeRef.current.clear();
     setActivePaywalls([]);
 
@@ -69,11 +74,18 @@ export function TranzmitProvider({
         debug,
       })
       .then(() => {
-        if (!cancelled) setIsReady(client.isReady());
+        if (!cancelled) {
+          setReadyError(undefined);
+          setUserContext(deriveUserContext(client.getIdentity()));
+          setIsReady(client.isReady());
+        }
       })
       .catch((err) => {
         onError?.(err);
-        if (!cancelled) setIsReady(false);
+        if (!cancelled) {
+          setReadyError(err);
+          setIsReady(false);
+        }
       });
 
     return () => {
@@ -84,7 +96,11 @@ export function TranzmitProvider({
   const gate = useCallback((trigger: string, options: GateOptions = {}): GateResult => {
     const client = clientRef.current;
     if (!client?.isReady()) {
-      options.onFallback?.({ trigger, reason: "not_ready" });
+      options.onFallback?.({
+        trigger,
+        reason: fallbackReasonFromError(readyError) || "not_ready",
+        error: readyError,
+      });
       return noopResult;
     }
 
@@ -122,18 +138,19 @@ export function TranzmitProvider({
       variantId: placement.variantId,
       dismiss: () => dismissPaywall(active.id, true),
     };
-  }, [dismissPaywall]);
+  }, [dismissPaywall, readyError]);
 
   const handlePaywallError = useCallback((active: ActivePaywall, error: Error) => {
+    const reason = fallbackReasonFromError(error) || "render_error";
     clientRef.current?.track("paywall_error", {
       ...attribution(active.trigger, active.placement),
-      reason: "render_error",
+      reason,
       message: error.message,
     });
     dismissPaywall(active.id, false);
     active.options.onFallback?.({
       trigger: active.trigger,
-      reason: "render_error",
+      reason,
       error,
       placement: active.placement,
       variantId: active.placement.variantId,
@@ -152,28 +169,38 @@ export function TranzmitProvider({
     const client = clientRef.current;
     if (!client) return;
     setIsReady(false);
+    setReadyError(undefined);
     activeRef.current.clear();
     setActivePaywalls([]);
-    await client.refreshConfig();
-    setIsReady(client.isReady());
+    try {
+      await client.refreshConfig();
+      setUserContext(deriveUserContext(client.getIdentity()));
+      setIsReady(client.isReady());
+    } catch (err: any) {
+      setReadyError(err);
+      setIsReady(false);
+      throw err;
+    }
   }, []);
 
   const value = useMemo<TranzmitContextValue>(() => ({
     isReady,
     ready: isReady,
+    user: userContext,
     gate,
     track,
     reportConversion,
     refreshConfig,
     flush: () => clientRef.current?.flush() || Promise.resolve(),
     getPlacement: (trigger) => clientRef.current?.getPlacement(trigger) || null,
-  }), [gate, isReady, refreshConfig, reportConversion, track]);
+  }), [gate, isReady, refreshConfig, reportConversion, track, userContext]);
 
   return (
     <TranzmitContext.Provider value={value}>
       {children}
       <PaywallHost
         activePaywalls={activePaywalls}
+        user={userContext}
         onCTA={(active, product) => {
           clientRef.current?.track("cta_click", {
             ...attribution(active.trigger, active.placement),
@@ -189,11 +216,31 @@ export function TranzmitProvider({
   );
 }
 
+function deriveUserContext(identity: TranzmitIdentity | null): PaywallUserContext | undefined {
+  if (!identity) return undefined;
+  const userId = identity.userId?.trim() || undefined;
+  const stableID = identity.identifiers?.stableID?.trim() || undefined;
+  const id = userId || stableID;
+  if (!id && !userId && !stableID) return undefined;
+  return { id, userId, stableID };
+}
+
 function presentationFromSpec(spec: any) {
   const mode = spec?.presentation?.mode;
   return mode === "modal" || mode === "fullscreen" || mode === "inline" || mode === "sheet"
     ? mode
     : "sheet";
+}
+
+function fallbackReasonFromError(error: Error | undefined): FallbackReason | undefined {
+  const code = (error as any)?.code;
+  if (code === "paywall_integrity_failed") return "integrity_failed";
+
+  const message = error?.message || "";
+  if (/integrity/i.test(message)) return "integrity_failed";
+  if (/unsupported.*version/i.test(message)) return "unsupported_version";
+  if (/missing a WebView document|no products|not hydrated/i.test(message)) return "invalid_paywall";
+  return undefined;
 }
 
 function attribution(trigger: string, placement: ActivePaywall["placement"]): Record<string, unknown> {

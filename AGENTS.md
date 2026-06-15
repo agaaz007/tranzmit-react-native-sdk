@@ -35,6 +35,8 @@ This dashboard value becomes `spec.products[0].id`. On CTA, the SDK calls `onCTA
 
 If the product ID is missing or wrong, stop and ask the human to fix the dashboard config. Do not hardcode a different billing product ID in the app.
 
+Only the Billing Product ID is authoritative in Tranzmit. StoreKit, Google Play Billing, RevenueCat, Razorpay, Stripe, or the customer's backend is the source of truth for product titles, localized prices, free trials, billing periods, eligibility, and checkout terms. Dashboard title/price/trial fields are display copy and must be QA-checked against the billing provider.
+
 ### Step 3: Add The Dependency
 
 For customer apps, install the published npm packages and peer dependencies:
@@ -166,9 +168,12 @@ Always wire `onFallback` to the app's current paywall. That keeps monetization a
 
 Fallback reasons:
 
-1. `not_ready`: the SDK has not loaded a valid config yet.
+1. `not_ready`: the SDK has not loaded a valid config yet, including offline startup or config fetch failure.
 2. `placement_not_found`: the trigger has no enabled placement in config.
-3. `render_error`: the hosted document or WebView failed after showing began.
+3. `integrity_failed`: the hosted document failed SHA-256 integrity validation.
+4. `invalid_paywall`: the placement has no renderable document or products.
+5. `unsupported_version`: the placement uses an unsupported WebView bridge version.
+6. `render_error`: the hosted document or WebView failed after showing began.
 
 ### Step 9: Verify Locally
 
@@ -205,12 +210,16 @@ The task is done only when:
 9. `onFallback` opens the app's existing paywall.
 10. `reportConversion()` is called only after billing succeeds.
 11. No hardcoded paywall UI is added to the host app.
-12. The integration has a manual QA path that proves the remote paywall renders, opens the right billing product, and falls back safely.
+12. The integration has a manual QA path that proves the remote paywall renders, opens the right billing product, shows billing-provider-authoritative checkout terms, and falls back safely.
+13. Hosted paywalls have config-side SHA-256 integrity metadata and fail closed if validation fails.
 
 ## Product Rules
 
 - Tranzmit does not process purchases.
 - Dashboard Billing Product IDs are the source of truth for `product.id`.
+- Billing providers are the source of truth for prices, free trials, billing periods, and entitlements.
 - WebView paywalls are the supported rendering path.
+- Hosted WebView documents must pass SHA-256 integrity validation before rendering.
+- WebView navigation and external URL opens must stay allowlisted through the SDK bridge.
 - Do not reintroduce native renderer layout/block trees unless there is an explicit compatibility requirement.
 - Keep customer-facing docs in this repo aligned with `tranzmit-flutter-sdk`.

@@ -25,6 +25,13 @@ export {
   hashString,
 } from "./identity.js";
 
+export {
+  PaywallIntegrityError,
+  assertDocumentIntegrity,
+  sha256Integrity,
+  verifyDocumentIntegrity,
+} from "./integrity.js";
+
 export type {
   TranzmitEvent,
   EventBatch,

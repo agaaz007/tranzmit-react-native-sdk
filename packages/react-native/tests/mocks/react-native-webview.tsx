@@ -8,7 +8,17 @@ export interface WebViewNavigation {
   url: string;
 }
 
-export default function WebView({ source, onMessage, onError }: any) {
+export default function WebView({
+  source,
+  onMessage,
+  onError,
+  originWhitelist,
+  javaScriptCanOpenWindowsAutomatically,
+  domStorageEnabled,
+  allowFileAccess,
+  allowUniversalAccessFromFileURLs,
+  mixedContentMode,
+}: any) {
   const html = source?.html || "";
   useEffect(() => {
     if (html.includes("data-trigger-webview-error")) {
@@ -27,6 +37,7 @@ export default function WebView({ source, onMessage, onError }: any) {
       return {
         action: attr(attrs, "data-tranzmit-action"),
         productId: attr(attrs, "data-product-id"),
+        url: attr(attrs, "href") || attr(attrs, "data-url"),
         label: stripTags(match[2]),
       };
     })
@@ -34,13 +45,19 @@ export default function WebView({ source, onMessage, onError }: any) {
 
   return (
     <div data-testid="tranzmit-webview" data-html={html}>
+      <span data-testid="tranzmit-webview-origin-whitelist">{JSON.stringify(originWhitelist || [])}</span>
+      <span data-testid="tranzmit-webview-js-windows">{String(javaScriptCanOpenWindowsAutomatically)}</span>
+      <span data-testid="tranzmit-webview-dom-storage">{String(domStorageEnabled)}</span>
+      <span data-testid="tranzmit-webview-file-access">{String(allowFileAccess)}</span>
+      <span data-testid="tranzmit-webview-universal-file-access">{String(allowUniversalAccessFromFileURLs)}</span>
+      <span data-testid="tranzmit-webview-mixed-content">{String(mixedContentMode)}</span>
       {headings.map((text) => (
         <span key={text}>{text}</span>
       ))}
       {buttons.map((button) => (
         <button
           key={`${button.action}:${button.productId || button.label}`}
-          onClick={() => onMessage?.({ nativeEvent: { data: JSON.stringify({ type: button.action, productId: button.productId }) } })}
+          onClick={() => onMessage?.({ nativeEvent: { data: JSON.stringify({ type: button.action, productId: button.productId, url: button.url }) } })}
         >
           {button.label}
         </button>

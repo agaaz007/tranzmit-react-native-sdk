@@ -2,7 +2,13 @@ import type { ReactNode } from "react";
 import type { PlacementConfig, ProductSpec } from "@tranzmit/shared";
 
 export type PresentationMode = "modal" | "sheet" | "fullscreen" | "inline";
-export type FallbackReason = "not_ready" | "placement_not_found" | "render_error";
+export type FallbackReason =
+  | "not_ready"
+  | "placement_not_found"
+  | "render_error"
+  | "integrity_failed"
+  | "invalid_paywall"
+  | "unsupported_version";
 
 export interface TranzmitProviderProps {
   publicKey: string;
@@ -50,6 +56,7 @@ export interface ReportConversionData {
 export interface TranzmitContextValue {
   isReady: boolean;
   ready: boolean;
+  user?: PaywallUserContext;
   gate: (trigger: string, options?: GateOptions) => GateResult;
   track: (event: string, properties?: Record<string, unknown>) => void;
   reportConversion: (data: ReportConversionData) => void;
@@ -65,4 +72,19 @@ export interface ActivePaywall {
   presentation: PresentationMode;
   options: GateOptions;
   shownAt: number;
+}
+
+/**
+ * Minimal, resolved user identity exposed to the paywall WebView so hosted
+ * documents can personalize runtime resources (for example a per-user image URL
+ * via a `data-tranzmit-src` template). No traits or raw identifier maps are
+ * exposed; only the resolved id and its components.
+ */
+export interface PaywallUserContext {
+  /** Resolved id: the app-provided userId when present, otherwise the stableID. */
+  id?: string;
+  /** App-provided user id, if a logged-in user was passed to the provider. */
+  userId?: string;
+  /** SDK-generated anonymous stable id. */
+  stableID?: string;
 }
