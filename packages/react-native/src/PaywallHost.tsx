@@ -7,12 +7,13 @@ import type { ActivePaywall, PaywallUserContext } from "./types.js";
 export interface PaywallHostProps {
   activePaywalls: ActivePaywall[];
   user?: PaywallUserContext;
+  locale?: string;
   onCTA: (active: ActivePaywall, product: ProductSpec) => void;
   onDismiss: (active: ActivePaywall) => void;
   onError: (active: ActivePaywall, error: Error) => void;
 }
 
-export function PaywallHost({ activePaywalls, user, onCTA, onDismiss, onError }: PaywallHostProps) {
+export function PaywallHost({ activePaywalls, user, locale, onCTA, onDismiss, onError }: PaywallHostProps) {
   return (
     <>
       {activePaywalls.map((active) => {
@@ -20,6 +21,7 @@ export function PaywallHost({ activePaywalls, user, onCTA, onDismiss, onError }:
           <SpecRenderer
             spec={active.placement.spec}
             user={user}
+            locale={locale}
             onCTA={(product) => onCTA(active, product)}
             onDismiss={() => onDismiss(active)}
             onError={(error) => onError(active, error)}
@@ -28,7 +30,7 @@ export function PaywallHost({ activePaywalls, user, onCTA, onDismiss, onError }:
         );
 
         if (active.presentation === "inline") {
-          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
+          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} locale={locale} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
         }
 
         if (active.presentation === "modal") {

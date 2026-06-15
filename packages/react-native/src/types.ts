@@ -17,6 +17,12 @@ export interface TranzmitProviderProps {
   userTraits?: Record<string, unknown>;
   privateTraits?: Record<string, unknown>;
   apiBaseUrl?: string;
+  /**
+   * Active locale (for example `es` or `es-MX`) used to localize paywall text
+   * tokens from `spec.localization`. When omitted, the spec's default locale is
+   * used.
+   */
+  locale?: string;
   onError?: (error: Error) => void;
   debug?: boolean;
   children: ReactNode;
@@ -57,6 +63,7 @@ export interface TranzmitContextValue {
   isReady: boolean;
   ready: boolean;
   user?: PaywallUserContext;
+  locale?: string;
   gate: (trigger: string, options?: GateOptions) => GateResult;
   track: (event: string, properties?: Record<string, unknown>) => void;
   reportConversion: (data: ReportConversionData) => void;

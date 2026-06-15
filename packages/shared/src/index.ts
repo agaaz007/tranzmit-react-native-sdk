@@ -2,6 +2,7 @@ export type {
   PaywallSpec,
   ProductSpec,
   AssetManifest,
+  PaywallLocalization,
 } from "./spec.js";
 
 export type {

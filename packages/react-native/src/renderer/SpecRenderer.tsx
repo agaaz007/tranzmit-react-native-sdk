@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Linking, PixelRatio, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
-import { verifyDocumentIntegrity, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
+import { verifyDocumentIntegrity, type PaywallLocalization, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
 import type { PaywallUserContext, PresentationMode } from "../types.js";
 
 let useSafeAreaInsets: undefined | (() => { top: number; bottom: number; left: number; right: number });
@@ -15,6 +15,7 @@ export interface SpecRendererProps {
   spec: PaywallSpec;
   presentation?: PresentationMode;
   user?: PaywallUserContext;
+  locale?: string;
   onCTA: (product: ProductSpec) => void;
   onDismiss: () => void;
   onError?: (error: Error) => void;
@@ -24,6 +25,7 @@ export function SpecRenderer({
   spec,
   presentation = "sheet",
   user,
+  locale,
   onCTA,
   onDismiss,
   onError,
@@ -37,8 +39,8 @@ export function SpecRenderer({
   );
   const validationError = useMemo(() => validateRenderableSpec(spec), [spec]);
   const html = useMemo(
-    () => validationError ? "" : composeDocument(spec, presentation, viewport, user),
-    [presentation, spec, user, validationError, viewport]
+    () => validationError ? "" : composeDocument(spec, presentation, viewport, user, locale),
+    [locale, presentation, spec, user, validationError, viewport]
   );
 
   useEffect(() => {
@@ -271,8 +273,9 @@ export function composeDocumentForTest(
   presentation: PresentationMode = "sheet",
   viewport?: PaywallViewportContract,
   user?: PaywallUserContext,
+  locale?: string,
 ) {
-  return composeDocument(spec, presentation, viewport, user);
+  return composeDocument(spec, presentation, viewport, user, locale);
 }
 
 function composeDocument(
@@ -280,6 +283,7 @@ function composeDocument(
   presentation: PresentationMode,
   viewport?: PaywallViewportContract,
   user?: PaywallUserContext,
+  locale?: string,
 ) {
   const document = spec.document || legacyDocument(spec);
   const js = document.js ? `<script>${document.js}</script>` : "";
@@ -288,7 +292,8 @@ function composeDocument(
   const viewportJson = JSON.stringify(resolvedViewport).replace(/</g, "\\u003c");
   const sanitizedUser = sanitizeUserContext(user);
   const userJson = JSON.stringify(sanitizedUser).replace(/</g, "\\u003c");
-  const documentHtml = bakePersonalizedSources(document.html || "", sanitizedUser);
+  const localizedHtml = localizeDocument(document.html || "", resolveTranslations(spec.localization, locale));
+  const documentHtml = bakePersonalizedSources(localizedHtml, sanitizedUser);
   const viewportCss = viewportCssVariables(resolvedViewport);
   return `<!doctype html>
 <html class="${presentationClass}" data-tranzmit-presentation="${presentation}">
@@ -663,6 +668,35 @@ function bakePersonalizedSources(html: string, user: Record<string, string>): st
       const resolved = fillTemplateString(template, user);
       return `data-tranzmit-fallback-src=${quote}${resolved}${quote} onerror=${quote}window.TranzmitImageFallback&&window.TranzmitImageFallback(this)${quote}`;
     });
+}
+
+function resolveTranslations(
+  localization: PaywallLocalization | undefined,
+  locale: string | undefined,
+): Record<string, string> {
+  if (!localization || !localization.translations) return {};
+  const { defaultLocale, translations } = localization;
+  const base = translations[defaultLocale] || {};
+  const candidates = [locale, baseLanguage(locale)];
+  for (const candidate of candidates) {
+    if (candidate && translations[candidate]) {
+      return { ...base, ...translations[candidate] };
+    }
+  }
+  return base;
+}
+
+function baseLanguage(locale: string | undefined): string | undefined {
+  if (!locale) return undefined;
+  const base = locale.split(/[-_]/)[0];
+  return base && base !== locale ? base : undefined;
+}
+
+function localizeDocument(html: string, strings: Record<string, string>): string {
+  return html.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
+    const value = strings[key];
+    return value == null ? "" : escapeHtml(String(value));
+  });
 }
 
 function escapeHtml(value: string) {

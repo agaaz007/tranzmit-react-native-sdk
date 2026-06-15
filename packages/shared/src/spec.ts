@@ -20,6 +20,18 @@ export interface AssetManifest {
   fonts?: string[];
 }
 
+export interface PaywallLocalization {
+  /** Locale used when no translation matches the active locale. */
+  defaultLocale: string;
+  /**
+   * Map of locale -> (token key -> translated string). Document HTML references
+   * these via `{{key}}` text tokens. Translations are config data and live on
+   * the spec, not inside `document.html`, so they do not affect the document
+   * integrity hash.
+   */
+  translations: Record<string, Record<string, string>>;
+}
+
 export interface WebViewDocumentSpec {
   /**
    * Inline fragment rendered by the SDK. May be omitted when `url` points to a
@@ -158,6 +170,7 @@ export interface PaywallSpec {
   };
   products: ProductSpec[];
   assets?: AssetManifest;
+  localization?: PaywallLocalization;
   customHtml?: string;
   customCss?: string;
   metadata?: Record<string, string>;

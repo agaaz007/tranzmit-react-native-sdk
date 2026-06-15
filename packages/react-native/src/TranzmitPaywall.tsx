@@ -29,7 +29,7 @@ export function TranzmitPaywall({
   onError,
   onImpression,
 }: TranzmitPaywallProps) {
-  const { getPlacement, track, user } = useTranzmit();
+  const { getPlacement, track, user, locale } = useTranzmit();
   const placement = trigger ? getPlacement(trigger) : null;
   const resolvedSpec = spec || placement?.spec;
   const resolvedTrigger = trigger || "dynamic_spec";
@@ -61,6 +61,7 @@ export function TranzmitPaywall({
       <SpecRenderer
         spec={resolvedSpec}
         user={user}
+        locale={locale}
         presentation={presentation || presentationFromSpec(resolvedSpec)}
         onCTA={(product) => {
           track("cta_click", {
@@ -76,7 +77,7 @@ export function TranzmitPaywall({
         onError={onError}
       />
     );
-  }, [handleDismiss, onCTA, onError, presentation, resolvedSpec, resolvedTrigger, resolvedVariantId, track, user]);
+  }, [handleDismiss, locale, onCTA, onError, presentation, resolvedSpec, resolvedTrigger, resolvedVariantId, track, user]);
 
   if (!visible || !resolvedSpec || !content) return null;
   const resolvedPresentation = presentation || presentationFromSpec(resolvedSpec);

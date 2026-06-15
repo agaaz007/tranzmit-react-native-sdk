@@ -222,4 +222,5 @@ The task is done only when:
 - Hosted WebView documents must pass SHA-256 integrity validation before rendering.
 - WebView navigation and external URL opens must stay allowlisted through the SDK bridge.
 - Do not reintroduce native renderer layout/block trees unless there is an explicit compatibility requirement.
+- Localize paywalls with one design: reference text as `{{key}}` tokens in the hosted document and supply per-locale strings in `spec.localization.translations`. Pass the active language via the `locale` prop on `TranzmitProvider`. The same document hash serves all languages, so integrity is unaffected. Only serve a separate per-locale document when a language needs a different layout (for example RTL). Localize display copy only; billing providers remain authoritative for prices, trials, and billing periods.
 - Keep customer-facing docs in this repo aligned with `tranzmit-flutter-sdk`.

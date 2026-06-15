@@ -204,6 +204,97 @@ describe("SpecRenderer", () => {
     expect(html).not.toContain('"userId"');
   });
 
+  it("substitutes localized text tokens for the active locale", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: { html: '<main><h1>{{headline}}</h1><button data-tranzmit-action="cta">{{cta}}</button></main>' },
+        localization: {
+          defaultLocale: "en",
+          translations: {
+            en: { headline: "Unlock Pro", cta: "Start free trial" },
+            es: { headline: "Desbloquea Pro", cta: "Comienza la prueba" },
+          },
+        },
+      },
+      "inline",
+      undefined,
+      undefined,
+      "es",
+    );
+
+    expect(html).toContain("Desbloquea Pro");
+    expect(html).toContain("Comienza la prueba");
+    expect(html).not.toContain("{{headline}}");
+    expect(html).not.toContain("Unlock Pro");
+  });
+
+  it("falls back from a regional locale to its base language", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: { html: "<main><h1>{{headline}}</h1></main>" },
+        localization: {
+          defaultLocale: "en",
+          translations: {
+            en: { headline: "Unlock Pro" },
+            es: { headline: "Desbloquea Pro" },
+          },
+        },
+      },
+      "inline",
+      undefined,
+      undefined,
+      "es-MX",
+    );
+
+    expect(html).toContain("Desbloquea Pro");
+  });
+
+  it("falls back per-key to the default locale and to empty for unknown keys", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: { html: "<main><h1>{{headline}}</h1><p>{{cta}}</p><span>{{unknown}}</span></main>" },
+        localization: {
+          defaultLocale: "en",
+          translations: {
+            en: { headline: "Unlock Pro", cta: "Start free trial" },
+            es: { headline: "Desbloquea Pro" },
+          },
+        },
+      },
+      "inline",
+      undefined,
+      undefined,
+      "es",
+    );
+
+    expect(html).toContain("Desbloquea Pro");
+    expect(html).toContain("Start free trial");
+    expect(html).not.toContain("{{unknown}}");
+  });
+
+  it("html-escapes localized strings", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: { html: "<main><h1>{{headline}}</h1></main>" },
+        localization: {
+          defaultLocale: "en",
+          translations: { en: { headline: "Save <50%> & more" } },
+        },
+      },
+      "inline",
+      undefined,
+      undefined,
+      "en",
+    );
+
+    expect(html).toContain("Save &lt;50%&gt; &amp; more");
+    expect(html).not.toContain("Save <50%>");
+  });
+
   it("does not flatten imported phone artboards with fullscreen overrides", () => {
     const html = composeDocumentForTest(
       {

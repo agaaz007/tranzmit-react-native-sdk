@@ -23,6 +23,7 @@ export function TranzmitProvider({
   userTraits,
   privateTraits,
   apiBaseUrl,
+  locale,
   onError,
   debug,
   children,
@@ -187,13 +188,14 @@ export function TranzmitProvider({
     isReady,
     ready: isReady,
     user: userContext,
+    locale,
     gate,
     track,
     reportConversion,
     refreshConfig,
     flush: () => clientRef.current?.flush() || Promise.resolve(),
     getPlacement: (trigger) => clientRef.current?.getPlacement(trigger) || null,
-  }), [gate, isReady, refreshConfig, reportConversion, track, userContext]);
+  }), [gate, isReady, locale, refreshConfig, reportConversion, track, userContext]);
 
   return (
     <TranzmitContext.Provider value={value}>
@@ -201,6 +203,7 @@ export function TranzmitProvider({
       <PaywallHost
         activePaywalls={activePaywalls}
         user={userContext}
+        locale={locale}
         onCTA={(active, product) => {
           clientRef.current?.track("cta_click", {
             ...attribution(active.trigger, active.placement),

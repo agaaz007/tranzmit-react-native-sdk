@@ -3,8 +3,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { sha256Integrity } from "@tranzmit/shared";
-import { TranzmitProvider, useTranzmit } from "../src/index.js";
-import { mockConfig } from "./fixtures.js";
+import { TranzmitProvider, TranzmitPaywall, useTranzmit } from "../src/index.js";
+import { baseSpec, mockConfig } from "./fixtures.js";
+
+const localizedSpec = {
+  ...baseSpec,
+  document: { html: "<main><h1>{{headline}}</h1></main>" },
+  localization: {
+    defaultLocale: "en",
+    translations: {
+      en: { headline: "Unlock Pro" },
+      es: { headline: "Desbloquea Pro" },
+    },
+  },
+};
+
+const localizedConfig = {
+  ...mockConfig,
+  placements: {
+    upgrade_pro: {
+      ...mockConfig.placements.upgrade_pro!,
+      spec: localizedSpec,
+    },
+  },
+};
 
 function GateHarness({ onCTA, onDismiss }: { onCTA?: any; onDismiss?: any }) {
   const { isReady, gate } = useTranzmit();
@@ -83,6 +105,34 @@ describe("TranzmitProvider", () => {
     fireEvent.click(getByText("Start Free Trial").closest("button")!);
 
     expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
+  });
+
+  it("localizes a gated paywall using the provider locale", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(localizedConfig),
+      })
+    );
+
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" locale="es">
+        <GateHarness />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Desbloquea Pro")).toBeTruthy());
+  });
+
+  it("localizes a declarative TranzmitPaywall using the provider locale", async () => {
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" locale="es">
+        <TranzmitPaywall spec={localizedSpec as any} visible presentation="inline" />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Desbloquea Pro")).toBeTruthy());
   });
 
   it("calls fallback when gate is requested before Tranzmit is ready", async () => {

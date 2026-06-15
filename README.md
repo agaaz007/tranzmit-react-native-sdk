@@ -534,6 +534,47 @@ Notes:
 3. `<img>` loads are subresources and do not require CORS on your API. They must be HTTPS (`mixedContentMode` is `never`).
 4. If you need the backend to choose the entire URL, your paywall JS can `fetch()` your API for the URL, but that path requires your API to send `Access-Control-Allow-Origin` because the WebView origin is `about:blank`.
 
+## Localization
+
+Paywalls are localized with one design and externalized strings: the hosted document keeps a single layout and references text with `{{key}}` tokens, while translations live on the spec and are substituted on-device at compose time.
+
+Hosted document:
+
+```html
+<h1>{{headline}}</h1>
+<button data-tranzmit-action="cta" data-product-id="pro_monthly">{{cta}}</button>
+```
+
+Spec (delivered in the normal `/v1/config` payload, managed in the dashboard):
+
+```jsonc
+"localization": {
+  "defaultLocale": "en",
+  "translations": {
+    "en": { "headline": "Unlock Pro", "cta": "Start free trial" },
+    "es": { "headline": "Desbloquea Pro", "cta": "Comienza la prueba" }
+  }
+}
+```
+
+Set the active locale on the provider:
+
+```tsx
+<TranzmitProvider publicKey="pk_live_..." locale="es">
+  <App />
+</TranzmitProvider>
+```
+
+Resolution and behavior:
+
+1. The active locale is the `locale` prop. The SDK uses `translations[locale]`, falls back to the base language (for example `es-MX` falls back to `es`), then to `defaultLocale`. Missing individual keys fall back per-key to `defaultLocale`, then to an empty string.
+2. Substitution happens at compose time (no flash) and applies to both text and attribute values such as `alt` or `aria-label`. Translated strings are HTML-escaped.
+3. Integrity is preserved: the hashed document contains the `{{...}}` tokens, so its hash is identical across all languages. Translations are config data and are not part of the document hash.
+4. Everything is offline-capable: all translations ship in the cached config, so switching `locale` needs no refetch.
+5. Prices, currencies, free trials, and billing periods remain authoritative from the billing provider. Localize display copy, not checkout terms.
+
+For languages that need a genuinely different layout (for example right-to-left scripts), serve a per-locale document instead: send `locale` as a trait and return a different `spec.document` from config. That uses the same trait-based selection as other server-driven routing and needs no client change.
+
 ## Versioning And Releases
 
 The SDK follows semantic versioning for published npm packages:
