@@ -29,6 +29,7 @@ export interface TranzmitError extends Error {
 export interface SharedClient {
   init(config: InitConfig): Promise<void>;
   refreshConfig(): Promise<void>;
+  setTraits(traits: Record<string, unknown>, options?: { merge?: boolean }): Promise<void>;
   getPlacement(trigger: string): PlacementConfig | null;
   track(event: string, properties?: Record<string, unknown>): void;
   reportConversion(data: Record<string, unknown>): void;
@@ -153,6 +154,37 @@ export function createTranzmitClient(
       );
       throw err;
     }
+  }
+
+  async function setTraits(
+    traits: Record<string, unknown>,
+    options?: { merge?: boolean }
+  ): Promise<void> {
+    // The category is typically set mid-session; wait for the in-flight init so
+    // we update a settled config rather than racing the bootstrap fetch.
+    if (initPromise) {
+      try {
+        await initPromise;
+      } catch {
+        // Init failure is already surfaced via onError; setTraits still tries to
+        // fetch below using whatever currentConfig/identity were established.
+      }
+    }
+    if (!currentConfig) return;
+
+    const nextTraits = options?.merge === false
+      ? { ...traits }
+      : { ...(currentConfig.userTraits || {}), ...traits };
+    currentConfig = { ...currentConfig, userTraits: nextTraits };
+    if (currentIdentity) {
+      currentInitKey = initKey(currentConfig, currentIdentity);
+    }
+
+    // Refetch + hydrate so the backend can re-route on the new traits. Resolves
+    // only after hydration, so awaiting setTraits is the "paywall is warm"
+    // signal. On failure the previous configResponse (and its hydrated default)
+    // is left intact for gate() to fall back to.
+    await refreshCurrentConfig();
   }
 
   function getPlacement(trigger: string): PlacementConfig | null {
@@ -280,6 +312,7 @@ export function createTranzmitClient(
   return {
     init,
     refreshConfig: refreshCurrentConfig,
+    setTraits,
     getPlacement,
     track,
     reportConversion,

@@ -395,6 +395,7 @@ const {
 | `track(event, properties)` | Queues a custom analytics event. |
 | `reportConversion(data)` | Sends a purchase/conversion event. |
 | `refreshConfig()` | Refetches dashboard config. Use during QA after dashboard edits. |
+| `setTraits(traits, options?)` | Updates user traits and refetches config so the backend can re-route the placement. Resolves after the paywall document is hydrated. See [Routing by category](#routing-by-category-dynamic-traits). |
 | `flush()` | Flushes queued analytics events. |
 | `getPlacement(trigger)` | Returns the current placement config or `null`. |
 
@@ -533,6 +534,42 @@ Notes:
 2. Because only the id value is substituted and the host is baked into the integrity-checked document, the document hash does not change per user, so caching and integrity both hold.
 3. `<img>` loads are subresources and do not require CORS on your API. They must be HTTPS (`mixedContentMode` is `never`).
 4. If you need the backend to choose the entire URL, your paywall JS can `fetch()` your API for the URL, but that path requires your API to send `Access-Control-Allow-Origin` because the WebView origin is `about:blank`.
+
+## Routing by category (dynamic traits)
+
+When the paywall a user should see depends on something learned during the session (for example a `category` of `love` / `marriage` / `wealth` returned by your backend partway through an onboarding chat), use `setTraits` to update traits after init and let the backend re-route a single trigger to the right experiment or multi-armed bandit.
+
+Initializing the SDK is not the same as presenting a paywall. The provider mounts once and renders nothing until `gate()`. So the pattern is: one cheap bootstrap fetch at launch, one category-aware prefetch mid-session, then present.
+
+```tsx
+const { setTraits, gate } = useTranzmit();
+
+// Mid-session: resolve the category from your own endpoint, then warm the
+// routed paywall. setTraits refetches config and resolves only after the
+// document is hydrated, so awaiting it means "the paywall is warm".
+async function onCategoryResolved() {
+  const category = await postCategoryEndpoint(); // your API call
+  await setTraits({ category });
+}
+
+// Later, present from the warm cache (instant, no spinner).
+function onPaywallMoment() {
+  gate("upgrade_pro", { onCTA, onFallback });
+}
+```
+
+Behavior and guarantees:
+
+1. `setTraits(traits, options?)` merges into existing traits by default; pass `{ merge: false }` to replace. Traits are sent on the `/v1/config` request (so the backend can route) and on analytics events (so conversions are attributed).
+2. It refetches and hydrates in place without flipping `isReady`, so an already-presented paywall is not torn down.
+3. If the category call is slow or fails, just call `gate()` anyway: it renders whatever the trigger currently resolves to (the hydrated launch-time default), and if no placement exists it calls `onFallback`.
+4. Traits set via `setTraits` persist across internal re-initialization (for example when `userId`/`userTraits` props change).
+
+Backend/dashboard prerequisites (outside this SDK):
+
+1. Configure the trigger so `/v1/config` reads the routing trait (for example `traits.category`) and selects the matching experiment or multi-armed bandit. Experiment/bandit assignment stays server-side; the SDK only renders the assigned `spec` and emits the impression/CTA/conversion signals (tagged with `variantId`) that a bandit needs as its reward loop.
+2. Bucket experiments on the custom ID `stableID` for sticky assignment across sessions and login.
+3. The trigger must return a default/holdout paywall before any routing trait is set, since that hydrated default is the fallback when the routing call is slow or fails.
 
 ## Localization
 

@@ -30,10 +30,15 @@ export function TranzmitProvider({
 }: TranzmitProviderProps) {
   const clientRef = useRef<SharedClient | null>(null);
   const activeRef = useRef<Map<string, ActivePaywall>>(new Map());
+  // Traits set at runtime via setTraits (for example the category resolved
+  // mid-session). Kept in a ref and merged into init so a later prop-driven
+  // re-init preserves them.
+  const dynamicTraitsRef = useRef<Record<string, unknown>>({});
   const [isReady, setIsReady] = useState(false);
   const [readyError, setReadyError] = useState<Error | undefined>();
   const [activePaywalls, setActivePaywalls] = useState<ActivePaywall[]>([]);
   const [userContext, setUserContext] = useState<PaywallUserContext | undefined>();
+  const [configVersion, setConfigVersion] = useState(0);
 
   if (!clientRef.current) {
     clientRef.current = createTranzmitClient(reactNativeAdapter, reactNativeMetadata);
@@ -68,7 +73,7 @@ export function TranzmitProvider({
         publicKey,
         userId,
         identifiers,
-        userTraits,
+        userTraits: { ...userTraits, ...dynamicTraitsRef.current },
         privateTraits,
         apiBaseUrl,
         onError: onError as any,
@@ -184,6 +189,18 @@ export function TranzmitProvider({
     }
   }, []);
 
+  const setTraits = useCallback(async (traits: Record<string, unknown>, options?: { merge?: boolean }) => {
+    const client = clientRef.current;
+    if (!client) return;
+    dynamicTraitsRef.current = options?.merge === false
+      ? { ...traits }
+      : { ...dynamicTraitsRef.current, ...traits };
+    // Refetch + hydrate in place. isReady stays true so any active paywall is
+    // not torn down; bump configVersion afterwards so getPlacement re-renders.
+    await client.setTraits(traits, options);
+    setConfigVersion((version) => version + 1);
+  }, []);
+
   const value = useMemo<TranzmitContextValue>(() => ({
     isReady,
     ready: isReady,
@@ -193,9 +210,10 @@ export function TranzmitProvider({
     track,
     reportConversion,
     refreshConfig,
+    setTraits,
     flush: () => clientRef.current?.flush() || Promise.resolve(),
     getPlacement: (trigger) => clientRef.current?.getPlacement(trigger) || null,
-  }), [gate, isReady, locale, refreshConfig, reportConversion, track, userContext]);
+  }), [configVersion, gate, isReady, locale, refreshConfig, reportConversion, setTraits, track, userContext]);
 
   return (
     <TranzmitContext.Provider value={value}>

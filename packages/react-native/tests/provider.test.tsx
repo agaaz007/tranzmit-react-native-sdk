@@ -66,6 +66,48 @@ function MissingPlacementHarness({ onFallback }: { onFallback?: any }) {
   return null;
 }
 
+function CategoryHarness() {
+  const { isReady, setTraits, gate } = useTranzmit();
+
+  useEffect(() => {
+    if (!isReady) return;
+    let cancelled = false;
+    void (async () => {
+      await setTraits({ category: "love" });
+      if (!cancelled) gate("upgrade_pro", { presentation: "inline" });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [gate, isReady, setTraits]);
+
+  return <div>{isReady ? "ready" : "loading"}</div>;
+}
+
+const baselineRoute = {
+  ...mockConfig,
+  placements: {
+    upgrade_pro: {
+      ...mockConfig.placements.upgrade_pro!,
+      spec: { ...baseSpec, document: { html: "<main><h1>Baseline Paywall</h1></main>" } },
+    },
+  },
+};
+
+const loveRoute = {
+  ...mockConfig,
+  placements: {
+    upgrade_pro: {
+      ...mockConfig.placements.upgrade_pro!,
+      variantId: "love_arm",
+      spec: {
+        ...baseSpec,
+        document: { html: "<main><h1>Love Arm Paywall</h1></main>" },
+      },
+    },
+  },
+};
+
 describe("TranzmitProvider", () => {
   beforeEach(() => {
     (AsyncStorage as any).clear();
@@ -133,6 +175,32 @@ describe("TranzmitProvider", () => {
     );
 
     await waitFor(() => expect(getByText("Desbloquea Pro")).toBeTruthy());
+  });
+
+  it("re-routes config via setTraits and presents the warmed paywall on gate", async () => {
+    const seenTraits: any[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: any) => {
+        if (String(url).endsWith("/v1/config")) {
+          const body = init?.body ? JSON.parse(init.body) : {};
+          seenTraits.push(body.traits);
+          const routed = body?.traits?.category === "love" ? loveRoute : baselineRoute;
+          return { ok: true, json: () => Promise.resolve(routed) } as any;
+        }
+        return { ok: true, json: () => Promise.resolve({}) } as any;
+      })
+    );
+
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo">
+        <CategoryHarness />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Love Arm Paywall")).toBeTruthy());
+    expect(seenTraits.some((traits) => traits?.category === "love")).toBe(true);
+    expect(getByText("ready")).toBeTruthy();
   });
 
   it("calls fallback when gate is requested before Tranzmit is ready", async () => {
