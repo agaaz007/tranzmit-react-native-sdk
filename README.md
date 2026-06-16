@@ -537,64 +537,122 @@ Notes:
 
 ## Routing by category (dynamic traits)
 
-When the paywall a user should see depends on something learned during the session (for example a `category` of `love` / `marriage` / `wealth` returned by your backend partway through an onboarding chat), use `setTraits` to update traits after init and let the backend re-route a single trigger to the right experiment or multi-armed bandit.
+Use this when the paywall a user should see depends on something you learn **during the session** — for example a `category` of `love` / `marriage` / `wealth` your backend returns partway through an onboarding chat. You keep **one** dashboard trigger (e.g. `upgrade_pro`) and let Tranzmit re-route it to the right paywall (experiment or multi-armed bandit) based on a trait you set at runtime with `setTraits`.
 
-Initializing the SDK is not the same as presenting a paywall. The provider mounts once and renders nothing until `gate()`. So the pattern is: one cheap bootstrap fetch at launch, one category-aware prefetch mid-session, then present.
+Key idea: **initializing the SDK is not the same as showing a paywall.** The provider mounts once at launch and renders nothing until you call `gate()`. So the flow is three distinct moments:
+
+| Moment | You call | What happens |
+|---|---|---|
+| App launch | mount `<TranzmitProvider>` | One bootstrap fetch. The trigger resolves to a **default/holdout** paywall. Nothing is shown. |
+| Mid-session (category known) | `await setTraits({ category })` | Refetches config with the trait so the backend re-routes the trigger, then warms (hydrates) the routed paywall. |
+| Upgrade moment | `gate("upgrade_pro", …)` | Presents the warmed paywall instantly — no spinner. |
+
+### Part A — Tranzmit dashboard / backend setup (one time)
+
+You (the Tranzmit team) do this once; the customer app does not touch it.
+
+1. **Create one trigger** (e.g. `upgrade_pro`). Do not create a separate trigger per category.
+2. **Add a default/holdout paywall** that the trigger returns when the routing trait is absent. This is what the app shows if the category call is slow, fails, or hasn't run yet — so it must be a real, sellable paywall.
+3. **Add a routing rule** so `/v1/config` reads `traits.category` and selects the matching experiment / multi-armed bandit (e.g. `love` → bandit A, `marriage` → bandit B, `wealth` → bandit C).
+4. **Bucket assignment on the custom ID `stableID`** so a user keeps the same variant across sessions and across login/logout.
+5. **Set a Billing Product ID on every variant** in every bandit (see [Step 2](#step-2-configure-billing-product-ids-in-tranzmit)).
+
+Assignment stays server-side. The app never talks to Statsig and never picks a variant — it only renders the assigned `spec` and emits the impression / CTA / conversion signals (tagged with `variantId`) that the bandit uses as its reward loop.
+
+### Part B — Customer app setup (step by step)
+
+**Step 1 — Mount the provider at launch (already done in [Step 5](#step-5-wrap-the-root-app)).** No category yet; the trigger resolves to the default paywall in the background.
+
+**Step 2 — When your backend knows the category, call `setTraits`.** This is *your* API call (Tranzmit does not call your endpoint). Awaiting `setTraits` means "the routed paywall is now warm in cache."
 
 ```tsx
 const { setTraits, gate } = useTranzmit();
 
-// Mid-session: resolve the category from your own endpoint, then warm the
-// routed paywall. setTraits refetches config and resolves only after the
-// document is hydrated, so awaiting it means "the paywall is warm".
+// Example: fired ~30s into the onboarding chat, as soon as you can classify.
 async function onCategoryResolved() {
-  const category = await postCategoryEndpoint(); // your API call
+  const category = await fetchCategoryFromYourBackend(); // "love" | "marriage" | "wealth"
   await setTraits({ category });
-}
-
-// Later, present from the warm cache (instant, no spinner).
-function onPaywallMoment() {
-  gate("upgrade_pro", { onCTA, onFallback });
 }
 ```
 
-Behavior and guarantees:
+**Step 3 — At the upgrade moment, present from the warm cache.** Instant render, no network wait.
 
-1. `setTraits(traits, options?)` merges into existing traits by default; pass `{ merge: false }` to replace. Traits are sent on the `/v1/config` request (so the backend can route) and on analytics events (so conversions are attributed).
-2. It refetches and hydrates in place without flipping `isReady`, so an already-presented paywall is not torn down.
-3. If the category call is slow or fails, just call `gate()` anyway: it renders whatever the trigger currently resolves to (the hydrated launch-time default), and if no placement exists it calls `onFallback`.
-4. Traits set via `setTraits` persist across internal re-initialization (for example when `userId`/`userTraits` props change).
+```tsx
+function onPaywallMoment() {
+  const result = gate("upgrade_pro", {
+    onCTA: async (product) => {
+      const ok = await purchaseProduct(product.id);
+      if (!ok) return;
+      reportConversion({
+        trigger: "upgrade_pro",
+        variantId: result.variantId, // ties the conversion back to the bandit arm
+        productId: product.id,
+        revenue: 999,
+        currency: "INR",
+      });
+    },
+    onFallback: () => openExistingInAppPaywall(),
+  });
+}
+```
 
-Backend/dashboard prerequisites (outside this SDK):
+**Step 4 — Handle the slow/failed category path.** You do not need extra error handling: if the category call is slow or fails, just call `gate()` anyway. It shows whatever the trigger currently resolves to (the launch-time default), and if no placement exists at all it calls `onFallback`. Optionally wrap the call so a slow backend never blocks the paywall:
 
-1. Configure the trigger so `/v1/config` reads the routing trait (for example `traits.category`) and selects the matching experiment or multi-armed bandit. Experiment/bandit assignment stays server-side; the SDK only renders the assigned `spec` and emits the impression/CTA/conversion signals (tagged with `variantId`) that a bandit needs as its reward loop.
-2. Bucket experiments on the custom ID `stableID` for sticky assignment across sessions and login.
-3. The trigger must return a default/holdout paywall before any routing trait is set, since that hydrated default is the fallback when the routing call is slow or fails.
+```tsx
+try {
+  await Promise.race([
+    onCategoryResolved(),
+    new Promise((r) => setTimeout(r, 1500)), // cap the wait; fall back to default
+  ]);
+} catch {
+  /* default paywall is already warm */
+}
+onPaywallMoment();
+```
+
+### Behavior and guarantees
+
+1. `setTraits(traits, options?)` **merges** into existing traits by default; pass `{ merge: false }` to replace them entirely. Traits go on the `/v1/config` request (so the backend can route) and on analytics events (so conversions are attributed).
+2. It refetches and hydrates **in place without flipping `isReady`**, so an already-presented paywall is never torn down.
+3. Calling `setTraits` again with a new category re-routes and re-warms; the latest call wins.
+4. Traits set via `setTraits` **persist across internal re-initialization** (for example when the `userId` or `userTraits` props change).
+5. If `setTraits` fails (network), the previously hydrated config is left intact so `gate()` still works.
 
 ## Localization
 
-Paywalls are localized with one design and externalized strings: the hosted document keeps a single layout and references text with `{{key}}` tokens, while translations live on the spec and are substituted on-device at compose time.
+Localize one paywall design instead of building one paywall per language. The hosted document keeps a **single layout** and marks each piece of text with a `{{key}}` token; the translations for every language ship on the spec, and the SDK substitutes the right language on-device before the WebView renders.
 
-Hosted document:
+This means: same document, same integrity hash, all languages — and switching language needs no network call.
+
+### Part A — Tranzmit dashboard setup (one time)
+
+**Step 1 — Tokenize the hosted document.** Replace every user-visible string with a `{{key}}` token. Tokens work in text *and* in attributes like `alt` or `aria-label`.
 
 ```html
 <h1>{{headline}}</h1>
+<p>{{subtitle}}</p>
+<img data-tranzmit-src="https://cdn.yourapp.com/hero.png" alt="{{hero_alt}}" />
 <button data-tranzmit-action="cta" data-product-id="pro_monthly">{{cta}}</button>
 ```
 
-Spec (delivered in the normal `/v1/config` payload, managed in the dashboard):
+**Step 2 — Add a `localization` block to the spec** (managed in the dashboard, delivered in the normal `/v1/config` payload). Provide a `defaultLocale` and a `translations` map keyed by locale, with one entry per token.
 
 ```jsonc
 "localization": {
   "defaultLocale": "en",
   "translations": {
-    "en": { "headline": "Unlock Pro", "cta": "Start free trial" },
-    "es": { "headline": "Desbloquea Pro", "cta": "Comienza la prueba" }
+    "en": { "headline": "Unlock Pro", "subtitle": "Everything, no limits", "cta": "Start free trial", "hero_alt": "Pro features" },
+    "es": { "headline": "Desbloquea Pro", "subtitle": "Todo, sin límites",    "cta": "Comienza la prueba", "hero_alt": "Funciones Pro" },
+    "hi": { "headline": "प्रो अनलॉक करें", "subtitle": "सब कुछ, बिना सीमा",     "cta": "मुफ़्त ट्रायल शुरू करें", "hero_alt": "प्रो फ़ीचर्स" }
   }
 }
 ```
 
-Set the active locale on the provider:
+Every key used as a `{{token}}` in the document should exist in `defaultLocale` so there is always a safe fallback.
+
+### Part B — Customer app setup
+
+**Step 3 — Pass the active language as the `locale` prop.** That is the only app change. Use whatever locale your app already tracks (user setting or device locale resolved by your app).
 
 ```tsx
 <TranzmitProvider publicKey="pk_live_..." locale="es">
@@ -602,15 +660,24 @@ Set the active locale on the provider:
 </TranzmitProvider>
 ```
 
-Resolution and behavior:
+To switch language at runtime, just change the prop — no refetch, no flash, because all translations are already in the cached config.
 
-1. The active locale is the `locale` prop. The SDK uses `translations[locale]`, falls back to the base language (for example `es-MX` falls back to `es`), then to `defaultLocale`. Missing individual keys fall back per-key to `defaultLocale`, then to an empty string.
-2. Substitution happens at compose time (no flash) and applies to both text and attribute values such as `alt` or `aria-label`. Translated strings are HTML-escaped.
-3. Integrity is preserved: the hashed document contains the `{{...}}` tokens, so its hash is identical across all languages. Translations are config data and are not part of the document hash.
-4. Everything is offline-capable: all translations ship in the cached config, so switching `locale` needs no refetch.
-5. Prices, currencies, free trials, and billing periods remain authoritative from the billing provider. Localize display copy, not checkout terms.
+```tsx
+const [locale, setLocale] = useState(deviceLocale());
+<TranzmitProvider publicKey="pk_live_..." locale={locale}>...</TranzmitProvider>
+```
 
-For languages that need a genuinely different layout (for example right-to-left scripts), serve a per-locale document instead: send `locale` as a trait and return a different `spec.document` from config. That uses the same trait-based selection as other server-driven routing and needs no client change.
+### How resolution works
+
+1. The active language is the `locale` prop. The SDK looks up `translations[locale]`, then falls back to the base language (`es-MX` → `es`), then to `defaultLocale`. A **missing individual key** falls back per-key to `defaultLocale`, then to an empty string.
+2. Substitution happens at **compose time** (before the WebView paints), so there is no untranslated flash. Translated strings are **HTML-escaped**.
+3. **Integrity is preserved.** The hashed document contains the `{{...}}` tokens, so its hash is identical for every language. Translations are config data, not part of the document hash.
+4. **Offline-capable.** All translations ship inside the cached config, so changing `locale` needs no refetch.
+5. **Localize copy only.** Prices, currencies, free trials, and billing periods stay authoritative from the billing provider. Do not put checkout terms in translation strings.
+
+### When a language needs a different layout
+
+For scripts that need a genuinely different layout (for example right-to-left languages), don't tokenize a shared document — serve a per-locale document instead. Send `locale` as a trait (via `userTraits` or `setTraits`) and return a different `spec.document` from config. This reuses the same server-side trait routing described in [Routing by category](#routing-by-category-dynamic-traits) and needs no extra client code.
 
 ## Versioning And Releases
 
