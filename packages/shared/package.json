@@ -1,6 +1,23 @@
 {
   "name": "@tranzmit/shared",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "description": "Shared HTTP client, identity, config, and types for the Tranzmit SDKs. Internal dependency of @tranzmit/react-native.",
+  "license": "UNLICENSED",
+  "author": "Tranzmit",
+  "homepage": "https://github.com/agaaz007/tranzmit-react-native-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agaaz007/tranzmit-react-native-sdk.git",
+    "directory": "packages/shared"
+  },
+  "bugs": {
+    "url": "https://github.com/agaaz007/tranzmit-react-native-sdk/issues"
+  },
+  "keywords": [
+    "tranzmit",
+    "paywall",
+    "sdk"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -12,7 +29,11 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -b --force"
+    "build": "tsc -b --force",
+    "prepublishOnly": "tsc -b --force"
   }
 }

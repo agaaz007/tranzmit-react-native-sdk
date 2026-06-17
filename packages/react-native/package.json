@@ -1,6 +1,28 @@
 {
   "name": "@tranzmit/react-native",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "description": "React Native SDK for Tranzmit server-driven WebView paywalls: remote config, hosted paywall rendering, server-side experiments, and impression/CTA/conversion analytics.",
+  "license": "UNLICENSED",
+  "author": "Tranzmit",
+  "homepage": "https://github.com/agaaz007/tranzmit-react-native-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agaaz007/tranzmit-react-native-sdk.git",
+    "directory": "packages/react-native"
+  },
+  "bugs": {
+    "url": "https://github.com/agaaz007/tranzmit-react-native-sdk/issues"
+  },
+  "keywords": [
+    "tranzmit",
+    "react-native",
+    "paywall",
+    "subscriptions",
+    "monetization",
+    "in-app-purchase",
+    "webview",
+    "expo"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -12,8 +34,12 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -b --force"
+    "build": "tsc -b --force",
+    "prepublishOnly": "tsc -b --force"
   },
   "peerDependencies": {
     "@react-native-async-storage/async-storage": ">=1.21.0",
@@ -37,6 +63,6 @@
     }
   },
   "dependencies": {
-    "@tranzmit/shared": "*"
+    "@tranzmit/shared": "0.1.0"
   }
 }
