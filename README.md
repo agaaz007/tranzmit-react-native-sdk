@@ -2,7 +2,7 @@
 
 Client React Native SDK for Tranzmit server-driven WebView paywalls. The SDK fetches remote placement config, renders hosted paywall documents, assigns users through server-side experiments, and sends impression / CTA / dismissal / conversion events back to Tranzmit.
 
-The Git repository is named `tranzmit-react-native-sdk`. The npm package customers import is `@tranzmit/react-native`.
+The Git repository is named `tranzmit-react-native-sdk`. The npm package customers install and import is the published package `@tranzmit/react-native`.
 
 ## What Customers Need
 
@@ -58,7 +58,7 @@ Only the product identifier is authoritative in Tranzmit. Product titles, displa
 
 ### Step 3: Add The React Native Dependency
 
-For production customer apps, install the published npm packages:
+For production customer apps, install the published npm package from the public npm registry:
 
 ```bash
 npm install @tranzmit/react-native
@@ -78,7 +78,7 @@ npx expo prebuild
 # or rebuild your EAS development client
 ```
 
-Distribution note: this repository is a source workspace containing `packages/react-native` and `packages/shared`. The npm install commands above work after `@tranzmit/react-native` and `@tranzmit/shared` are published. npm cannot install `@tranzmit/react-native` directly from the GitHub workspace URL. For local SDK development, use this repo's `example/` app or local `file:` dependencies.
+Distribution note: this repository is a source workspace containing `packages/react-native` and `packages/shared`. Customers install only `@tranzmit/react-native`; npm resolves its internal `@tranzmit/shared` dependency. Do not install `@tranzmit/react-native` directly from the GitHub workspace URL. For local SDK development, use this repo's `example/` app or local `file:` dependencies.
 
 ### Step 4: Import The SDK
 
@@ -688,6 +688,57 @@ The SDK follows semantic versioning for published npm packages:
 3. Major releases are reserved for breaking public API changes, unsupported bridge version removals, or migration-required behavior changes.
 
 Every published release should update `CHANGELOG.md` with customer-visible changes, migration notes for breaking changes, and any security or fallback behavior changes. Because Tranzmit sits in revenue-critical flows, customer apps should pin a tested version and upgrade through their normal purchase-flow QA checklist.
+
+### NPM distribution
+
+The customer-facing npm package is published as `@tranzmit/react-native`. It depends on `@tranzmit/shared`, which is an internal workspace package that must also be published and publicly visible for customer installs to resolve.
+
+Verify the currently published versions:
+
+```bash
+npm view @tranzmit/react-native version
+npm view @tranzmit/shared version
+```
+
+If either command returns `404`, fix npm package access before announcing the release. For a scoped public package, an npm owner can run:
+
+```bash
+npm access public @tranzmit/shared
+npm access public @tranzmit/react-native
+```
+
+### Publishing a release
+
+Publish from the repository root with an npm account that has publish access to the `@tranzmit` scope.
+
+```bash
+npm login
+npm whoami
+```
+
+Before publishing, bump both workspace package versions and keep `packages/react-native/package.json` pointed at the matching `@tranzmit/shared` version. Then validate the workspace:
+
+```bash
+npm install --legacy-peer-deps
+npm run build
+npm test
+```
+
+Dry-run both tarballs:
+
+```bash
+npm publish --workspace packages/shared --access public --dry-run
+npm publish --workspace packages/react-native --access public --dry-run
+```
+
+Publish in dependency order:
+
+```bash
+npm publish --workspace packages/shared --access public
+npm publish --workspace packages/react-native --access public
+```
+
+Do not publish `@tranzmit/react-native` before `@tranzmit/shared`; the React Native package depends on the shared package. Do not reuse a version number after npm accepts it. If npm requires two-factor authentication, complete the passkey/security-key prompt or publish with a properly scoped granular access token that is allowed to publish packages.
 
 ## Local Development
 
