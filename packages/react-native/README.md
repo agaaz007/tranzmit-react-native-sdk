@@ -16,6 +16,7 @@ Expo (non–Expo Go): rebuild the dev client after adding the native modules (`n
 ## Quick start
 
 ```tsx
+import { useEffect } from "react";
 import { TranzmitProvider, useTranzmit } from "@tranzmit/react-native";
 
 export default function App() {
@@ -27,7 +28,12 @@ export default function App() {
 }
 
 function UpgradeButton() {
-  const { gate, reportConversion } = useTranzmit();
+  const { isReady, gate, preloadPlacement, reportConversion } = useTranzmit();
+
+  useEffect(() => {
+    if (!isReady) return;
+    void preloadPlacement("upgrade_pro");
+  }, [isReady, preloadPlacement]);
 
   return (
     <Button

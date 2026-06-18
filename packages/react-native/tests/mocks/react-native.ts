@@ -9,6 +9,9 @@ function host(tag: string) {
     delete domProps.accessibilityRole;
     delete domProps.accessibilityState;
     delete domProps.accessibilityLabel;
+    delete domProps.importantForAccessibility;
+    delete domProps.pointerEvents;
+    delete domProps.hitSlop;
     delete domProps.resizeMode;
     delete domProps.source;
     delete domProps.bounces;

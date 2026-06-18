@@ -84,6 +84,53 @@ function CategoryHarness() {
   return <div>{isReady ? "ready" : "loading"}</div>;
 }
 
+function PreloadHarness({
+  gateAfterPreload = false,
+  onCTA,
+  onGate,
+  onImpression,
+  onPreload,
+  onPreloadFlushed,
+  onGateFlushed,
+}: {
+  gateAfterPreload?: boolean;
+  onCTA?: any;
+  onGate?: any;
+  onImpression?: any;
+  onPreload?: any;
+  onPreloadFlushed?: any;
+  onGateFlushed?: any;
+}) {
+  const { isReady, preloadPlacement, gate, flush } = useTranzmit();
+
+  useEffect(() => {
+    if (!isReady) return;
+    let cancelled = false;
+    void (async () => {
+      const preload = await preloadPlacement("upgrade_pro", { presentation: "inline" });
+      if (cancelled) return;
+      onPreload?.(preload);
+      await flush();
+      if (cancelled) return;
+      onPreloadFlushed?.();
+      if (!gateAfterPreload) return;
+      const result = gate("upgrade_pro", {
+        presentation: "inline",
+        onCTA,
+        onImpression,
+      });
+      onGate?.(result);
+      await flush();
+      if (!cancelled) onGateFlushed?.();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [flush, gate, gateAfterPreload, isReady, onCTA, onGate, onGateFlushed, onImpression, onPreload, onPreloadFlushed, preloadPlacement]);
+
+  return <div>{isReady ? "ready" : "loading"}</div>;
+}
+
 const baselineRoute = {
   ...mockConfig,
   placements: {
@@ -201,6 +248,76 @@ describe("TranzmitProvider", () => {
     await waitFor(() => expect(getByText("Love Arm Paywall")).toBeTruthy());
     expect(seenTraits.some((traits) => traits?.category === "love")).toBe(true);
     expect(getByText("ready")).toBeTruthy();
+  });
+
+  it("preloads a hosted paywall without sending an impression", async () => {
+    const onPreload = vi.fn();
+    const onPreloadFlushed = vi.fn();
+    render(
+      <TranzmitProvider publicKey="pk_test_demo">
+        <PreloadHarness onPreload={onPreload} onPreloadFlushed={onPreloadFlushed} />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(onPreload).toHaveBeenCalledWith(expect.objectContaining({
+      ok: true,
+      status: "ready",
+      variantId: "var_a",
+    })));
+    await waitFor(() => expect(onPreloadFlushed).toHaveBeenCalledTimes(1));
+
+    const events = flushedEvents();
+    expect(events.some((event) => event.event === "impression")).toBe(false);
+  });
+
+  it("tracks impression only when a preloaded paywall is revealed", async () => {
+    const onCTA = vi.fn();
+    const onGate = vi.fn();
+    const onImpression = vi.fn();
+    const onPreloadFlushed = vi.fn();
+    const onGateFlushed = vi.fn();
+    const { getAllByTestId, getByText, rerender } = render(
+      <TranzmitProvider publicKey="pk_test_demo">
+        <PreloadHarness
+          onCTA={onCTA}
+          onGate={onGate}
+          onImpression={onImpression}
+          onPreloadFlushed={onPreloadFlushed}
+          onGateFlushed={onGateFlushed}
+        />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(onPreloadFlushed).toHaveBeenCalledTimes(1));
+    expect(flushedEvents().some((event) => event.event === "impression")).toBe(false);
+
+    rerender(
+      <TranzmitProvider publicKey="pk_test_demo">
+        <PreloadHarness
+          gateAfterPreload
+          onCTA={onCTA}
+          onGate={onGate}
+          onImpression={onImpression}
+          onPreloadFlushed={onPreloadFlushed}
+          onGateFlushed={onGateFlushed}
+        />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(onGate).toHaveBeenCalledWith(expect.objectContaining({
+      shown: true,
+      variantId: "var_a",
+    })));
+    await waitFor(() => expect(onGateFlushed).toHaveBeenCalledTimes(1));
+    expect(onImpression).toHaveBeenCalledTimes(1);
+    expect(getAllByTestId("tranzmit-webview")).toHaveLength(1);
+
+    const impressions = flushedEvents().filter((event) => event.event === "impression");
+    expect(impressions).toHaveLength(1);
+    expect(impressions[0].properties.trigger).toBe("upgrade_pro");
+
+    fireEvent.click(getByText("Start Free Trial").closest("button")!);
+    expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
   });
 
   it("calls fallback when gate is requested before Tranzmit is ready", async () => {
@@ -410,6 +527,15 @@ describe("TranzmitProvider", () => {
     })));
   });
 });
+
+function flushedEvents() {
+  return vi.mocked(fetch).mock.calls
+    .filter(([url]) => String(url).includes("/v1/events"))
+    .flatMap(([, init]) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return body.events || [];
+    });
+}
 
 function RenderErrorHarness({ onFallback }: { onFallback?: any }) {
   const { isReady, gate } = useTranzmit();

@@ -380,6 +380,7 @@ const {
   isReady,
   ready,
   gate,
+  preloadPlacement,
   track,
   reportConversion,
   refreshConfig,
@@ -392,12 +393,50 @@ const {
 |---|---|
 | `isReady` / `ready` | True after valid config is loaded. |
 | `gate(trigger, options)` | Presents a placement and returns `GateResult`. |
+| `preloadPlacement(trigger, options?)` | Mounts a hidden WebView for a placement and resolves when the document is ready. |
 | `track(event, properties)` | Queues a custom analytics event. |
 | `reportConversion(data)` | Sends a purchase/conversion event. |
 | `refreshConfig()` | Refetches dashboard config. Use during QA after dashboard edits. |
 | `setTraits(traits, options?)` | Updates user traits and refetches config so the backend can re-route the placement. Resolves after the paywall document is hydrated. See [Routing by category](#routing-by-category-dynamic-traits). |
 | `flush()` | Flushes queued analytics events. |
 | `getPlacement(trigger)` | Returns the current placement config or `null`. |
+
+### `preloadPlacement(trigger, options?)`
+
+```tsx
+function UpgradeScreen() {
+  const { isReady, preloadPlacement, gate } = useTranzmit();
+
+  useEffect(() => {
+    if (!isReady) return;
+    void preloadPlacement("upgrade_pro", { presentation: "sheet" });
+  }, [isReady, preloadPlacement]);
+
+  return (
+    <Button
+      title="Upgrade"
+      onPress={() => {
+        gate("upgrade_pro", {
+          presentation: "sheet",
+          onCTA: (product) => purchaseProduct(product.id),
+          onFallback: () => openExistingInAppPaywall(),
+        });
+      }}
+    />
+  );
+}
+```
+
+`preloadPlacement()` does not track an impression and does not call `onCTA` / `onDismiss`; it only warms the hosted WebView slot inside `TranzmitProvider`. The impression is tracked when `gate()` reveals that warmed slot. The preload key includes trigger, variant ID, document cache key/revision, and presentation mode, so changing config, identity, traits, or presentation invalidates stale hidden slots.
+
+`PreloadResult`:
+
+| Field | Description |
+|---|---|
+| `ok` | `true` when the hidden WebView reached ready state. |
+| `status` | `ready`, `loading`, or `failed`. Awaited calls normally resolve as `ready` or `failed`. |
+| `reason` | Fallback-style reason when preload cannot start or render. |
+| `variantId` | Assigned variant ID when a placement was found. |
 
 ### `gate(trigger, options)`
 

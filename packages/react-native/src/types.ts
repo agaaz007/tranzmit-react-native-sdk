@@ -36,6 +36,22 @@ export interface GateOptions {
   presentation?: PresentationMode;
 }
 
+export interface PreloadPlacementOptions {
+  presentation?: PresentationMode;
+}
+
+export type PreloadStatus = "loading" | "ready" | "failed";
+
+export interface PreloadResult {
+  ok: boolean;
+  trigger: string;
+  status: PreloadStatus;
+  reason?: FallbackReason;
+  error?: Error;
+  placement?: PlacementConfig;
+  variantId?: string;
+}
+
 export interface FallbackEvent {
   trigger: string;
   reason: FallbackReason;
@@ -65,6 +81,7 @@ export interface TranzmitContextValue {
   user?: PaywallUserContext;
   locale?: string;
   gate: (trigger: string, options?: GateOptions) => GateResult;
+  preloadPlacement: (trigger: string, options?: PreloadPlacementOptions) => Promise<PreloadResult>;
   track: (event: string, properties?: Record<string, unknown>) => void;
   reportConversion: (data: ReportConversionData) => void;
   refreshConfig: () => Promise<void>;
@@ -80,6 +97,17 @@ export interface ActivePaywall {
   presentation: PresentationMode;
   options: GateOptions;
   shownAt: number;
+}
+
+export interface PreloadedPaywall {
+  id: string;
+  trigger: string;
+  placement: PlacementConfig;
+  presentation: PresentationMode;
+  signature: string;
+  status: PreloadStatus;
+  error?: Error;
+  active?: ActivePaywall;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, PixelRatio, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
 import { verifyDocumentIntegrity, type PaywallLocalization, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
@@ -19,6 +19,7 @@ export interface SpecRendererProps {
   onCTA: (product: ProductSpec) => void;
   onDismiss: () => void;
   onError?: (error: Error) => void;
+  onReady?: () => void;
 }
 
 export function SpecRenderer({
@@ -29,6 +30,7 @@ export function SpecRenderer({
   onCTA,
   onDismiss,
   onError,
+  onReady,
 }: SpecRendererProps) {
   const windowSize = useWindowDimensions();
   const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0, bottom: 0, left: 0, right: 0 };
@@ -42,10 +44,23 @@ export function SpecRenderer({
     () => validationError ? "" : composeDocument(spec, presentation, viewport, user, locale),
     [locale, presentation, spec, user, validationError, viewport]
   );
+  const readyKeyRef = useRef(html);
+  const readyFiredRef = useRef(false);
 
   useEffect(() => {
     if (validationError) onError?.(validationError);
   }, [onError, validationError]);
+
+  if (readyKeyRef.current !== html) {
+    readyKeyRef.current = html;
+    readyFiredRef.current = false;
+  }
+
+  const markReady = () => {
+    if (readyFiredRef.current) return;
+    readyFiredRef.current = true;
+    onReady?.();
+  };
 
   if (validationError) {
     return null;
@@ -63,6 +78,11 @@ export function SpecRenderer({
 
     const type = String(message.type || message.action || "");
     if (!isAllowed(spec, type)) return;
+
+    if (type === "ready") {
+      markReady();
+      return;
+    }
 
     if (type === "cta" || type === "cta_click") {
       const product = productFromMessage(spec, message) || defaultProduct(spec);
@@ -133,6 +153,7 @@ export function SpecRenderer({
         onError={handleRenderError}
         onHttpError={handleRenderError}
         onContentProcessDidTerminate={() => onError?.(new Error("Tranzmit WebView content process terminated"))}
+        onLoadEnd={markReady}
         onShouldStartLoadWithRequest={shouldStart}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}

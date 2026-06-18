@@ -1,6 +1,6 @@
 {
   "name": "@tranzmit/shared",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shared HTTP client, identity, config, and types for the Tranzmit SDKs. Internal dependency of @tranzmit/react-native.",
   "license": "UNLICENSED",
   "author": "Tranzmit",

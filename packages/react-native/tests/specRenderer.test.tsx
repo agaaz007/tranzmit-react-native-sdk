@@ -37,6 +37,36 @@ describe("SpecRenderer", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("fires onReady when the WebView finishes loading", async () => {
+    const onReady = vi.fn();
+    render(
+      <SpecRenderer spec={baseSpec} presentation="inline" onCTA={() => {}} onDismiss={() => {}} onReady={onReady} />
+    );
+
+    await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+  });
+
+  it("fires onReady from the hosted ready bridge event", () => {
+    const onReady = vi.fn();
+    const spec = {
+      ...baseSpec,
+      document: {
+        html: `
+          <main data-skip-load-end>
+            <button data-tranzmit-action="ready">Ready</button>
+          </main>
+        `,
+      },
+    };
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" onCTA={() => {}} onDismiss={() => {}} onReady={onReady} />
+    );
+
+    expect(onReady).not.toHaveBeenCalled();
+    fireEvent.click(getByText("Ready"));
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
   it("uses restricted WebView capabilities by default", () => {
     const { getByTestId } = render(
       <SpecRenderer spec={baseSpec} presentation="inline" onCTA={() => {}} onDismiss={() => {}} />

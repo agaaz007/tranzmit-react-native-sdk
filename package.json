@@ -1,7 +1,7 @@
 {
   "name": "tranzmit-react-native-sdk",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Standalone React Native SDK for Tranzmit server-driven WebView paywalls.",
   "workspaces": [
     "packages/shared",

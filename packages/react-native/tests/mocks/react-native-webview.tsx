@@ -12,6 +12,7 @@ export default function WebView({
   source,
   onMessage,
   onError,
+  onLoadEnd,
   originWhitelist,
   javaScriptCanOpenWindowsAutomatically,
   domStorageEnabled,
@@ -23,8 +24,12 @@ export default function WebView({
   useEffect(() => {
     if (html.includes("data-trigger-webview-error")) {
       onError?.({ nativeEvent: { description: "Simulated WebView failure" } });
+      return;
     }
-  }, [html, onError]);
+    if (!html.includes("data-skip-load-end")) {
+      onLoadEnd?.({ nativeEvent: {} });
+    }
+  }, [html, onError, onLoadEnd]);
 
   const body = html
     .replace(/<style[\s\S]*?<\/style>/gi, "")

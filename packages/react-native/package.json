@@ -1,6 +1,6 @@
 {
   "name": "@tranzmit/react-native",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React Native SDK for Tranzmit server-driven WebView paywalls: remote config, hosted paywall rendering, server-side experiments, and impression/CTA/conversion analytics.",
   "license": "UNLICENSED",
   "author": "Tranzmit",
@@ -63,6 +63,6 @@
     }
   },
   "dependencies": {
-    "@tranzmit/shared": "0.1.0"
+    "@tranzmit/shared": "0.1.1"
   }
 }
