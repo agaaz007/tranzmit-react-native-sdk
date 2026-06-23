@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, PixelRatio, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
-import { verifyDocumentIntegrity, type PaywallLocalization, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
+import { localizeHtml, resolveLocalizedStrings, verifyDocumentIntegrity, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
 import type { PaywallUserContext, PresentationMode } from "../types.js";
 
 let useSafeAreaInsets: undefined | (() => { top: number; bottom: number; left: number; right: number });
@@ -313,9 +313,10 @@ function composeDocument(
   const viewportJson = JSON.stringify(resolvedViewport).replace(/</g, "\\u003c");
   const sanitizedUser = sanitizeUserContext(user);
   const userJson = JSON.stringify(sanitizedUser).replace(/</g, "\\u003c");
-  const localizedHtml = localizeDocument(document.html || "", resolveTranslations(spec.localization, locale));
+  const localizedHtml = localizeHtml(document.html || "", resolveLocalizedStrings(spec.localization, locale));
   const documentHtml = bakePersonalizedSources(localizedHtml, sanitizedUser);
   const viewportCss = viewportCssVariables(resolvedViewport);
+  const safeAreaCss = hostedSafeAreaCss(document.html || "");
   return `<!doctype html>
 <html class="${presentationClass}" data-tranzmit-presentation="${presentation}">
 <head>
@@ -343,6 +344,7 @@ ${viewportCss}
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   button, a { touch-action: manipulation; }
   ${document.css || ""}
+${safeAreaCss}
   html, body { max-width: var(--tz-vw); overflow-x: hidden !important; }
   .tz-paywall:not(.phone), .tranzmit-paywall {
     max-width: var(--tz-vw);
@@ -559,6 +561,26 @@ function fallbackViewport(presentation: PresentationMode): PaywallViewportContra
   return viewportFromNativeLayout(presentation, { width: 390, height: 844 });
 }
 
+// Managed paywall containers (legacy block-tree + influish hosted designs) already consume the
+// `--tz-safe-*` variables internally, so they must not get a second, document-wide inset.
+const MANAGED_CONTAINER_PATTERN = /\b(?:tranzmit-paywall|tz-paywall)\b/;
+
+// Hosted documents that bring their own full-bleed layout (e.g. `.device`/`.screen` shells) never
+// reference the safe-area variables themselves, so their first row can slide under the status bar
+// or notch and their footer under the home indicator. When we detect such a document we apply the
+// native insets as document-level padding so the content is always inside the safe area while the
+// document's own background still paints edge-to-edge (the padding area shows the body background).
+function hostedSafeAreaCss(html: string): string {
+  if (MANAGED_CONTAINER_PATTERN.test(html)) return "";
+  return `  /* Tranzmit safe-area insets for hosted documents (status bar, notch, home indicator) */
+  body {
+    padding-top: max(env(safe-area-inset-top, 0px), var(--tz-safe-top, 0px)) !important;
+    padding-right: max(env(safe-area-inset-right, 0px), var(--tz-safe-right, 0px)) !important;
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tz-safe-bottom, 0px)) !important;
+    padding-left: max(env(safe-area-inset-left, 0px), var(--tz-safe-left, 0px)) !important;
+  }`;
+}
+
 function viewportCssVariables(viewport: PaywallViewportContract) {
   return [
     `  --tz-container-width: ${viewport.width.toFixed(2)}px;`,
@@ -689,35 +711,6 @@ function bakePersonalizedSources(html: string, user: Record<string, string>): st
       const resolved = fillTemplateString(template, user);
       return `data-tranzmit-fallback-src=${quote}${resolved}${quote} onerror=${quote}window.TranzmitImageFallback&&window.TranzmitImageFallback(this)${quote}`;
     });
-}
-
-function resolveTranslations(
-  localization: PaywallLocalization | undefined,
-  locale: string | undefined,
-): Record<string, string> {
-  if (!localization || !localization.translations) return {};
-  const { defaultLocale, translations } = localization;
-  const base = translations[defaultLocale] || {};
-  const candidates = [locale, baseLanguage(locale)];
-  for (const candidate of candidates) {
-    if (candidate && translations[candidate]) {
-      return { ...base, ...translations[candidate] };
-    }
-  }
-  return base;
-}
-
-function baseLanguage(locale: string | undefined): string | undefined {
-  if (!locale) return undefined;
-  const base = locale.split(/[-_]/)[0];
-  return base && base !== locale ? base : undefined;
-}
-
-function localizeDocument(html: string, strings: Record<string, string>): string {
-  return html.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
-    const value = strings[key];
-    return value == null ? "" : escapeHtml(String(value));
-  });
 }
 
 function escapeHtml(value: string) {

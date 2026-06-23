@@ -1,14 +1,23 @@
 import { useState } from "react";
-import { Alert, Button, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  Button,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { TranzmitProvider, TranzmitPaywall, useTranzmit, type FallbackEvent } from "@tranzmit/react-native";
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_TRANZMIT_API_BASE_URL;
-const PUBLIC_KEY = process.env.EXPO_PUBLIC_TRANZMIT_PUBLIC_KEY || "pk_test_2a8a5f07d4b9fcf1cc77e024";
+const PUBLIC_KEY = process.env.EXPO_PUBLIC_TRANZMIT_PUBLIC_KEY || "pk_test_320da03ab659ffc56d58acd2";
 const TRIGGER = process.env.EXPO_PUBLIC_TRANZMIT_TRIGGER || "upgrade_pro";
-const USER_ID = process.env.EXPO_PUBLIC_TRANZMIT_USER_ID || "react-native-sdk-harness";
+const DEFAULT_USER_ID = process.env.EXPO_PUBLIC_TRANZMIT_USER_ID || "react-native-sdk-harness";
 
-function DemoControls() {
-  const { gate, getPlacement, isReady, refreshConfig, reportConversion, track } = useTranzmit();
+function DemoControls({ activeUserId }: { activeUserId?: string }) {
+  const { gate, getPlacement, isReady, refreshConfig, reportConversion, track, user } = useTranzmit();
   const [showInline, setShowInline] = useState(false);
   const [lastEvent, setLastEvent] = useState<string | null>(null);
   const placement = getPlacement(TRIGGER);
@@ -28,7 +37,7 @@ function DemoControls() {
 
   const present = () => {
     const result = gate(TRIGGER, {
-      presentation: "sheet",
+      presentation: "fullscreen",
       onCTA: async (product) => {
         record(`CTA tapped: ${product.id}`);
         track("expo_demo_cta", { productId: product.id });
@@ -50,7 +59,7 @@ function DemoControls() {
   };
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
           <Text style={styles.eyebrow}>SDK status</Text>
@@ -58,7 +67,9 @@ function DemoControls() {
           <StatusRow label="API" value={API_BASE_URL || "default"} />
           <StatusRow label="Public key" value={PUBLIC_KEY} />
           <StatusRow label="Trigger" value={TRIGGER} />
-          <StatusRow label="User" value={USER_ID} />
+          <StatusRow label="User ID" value={activeUserId || "(none — stableID only)"} />
+          <StatusRow label="Resolved ID" value={user?.id || "-"} />
+          <StatusRow label="Stable ID" value={user?.stableID || "-"} />
           {lastEvent ? <StatusRow label="Last event" value={lastEvent} /> : null}
         </View>
 
@@ -96,7 +107,7 @@ function DemoControls() {
           onError={(error) => openFallback({ trigger: TRIGGER, reason: "render_error", error })}
         />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -116,15 +127,57 @@ function priceForConversion(price: string | { amount: number; currency: string }
 }
 
 export default function App() {
+  const [userIdDraft, setUserIdDraft] = useState(DEFAULT_USER_ID);
+  const [activeUserId, setActiveUserId] = useState<string | undefined>(DEFAULT_USER_ID || undefined);
+
+  const applyUserId = () => {
+    const next = userIdDraft.trim();
+    setActiveUserId(next || undefined);
+  };
+
+  const clearUserId = () => {
+    setUserIdDraft("");
+    setActiveUserId(undefined);
+  };
+
   return (
-    <TranzmitProvider
-      publicKey={PUBLIC_KEY}
-      apiBaseUrl={API_BASE_URL}
-      userId={USER_ID}
-      onError={(error) => console.warn("[Tranzmit]", error)}
-    >
-      <DemoControls />
-    </TranzmitProvider>
+    <SafeAreaProvider>
+      <TranzmitProvider
+        key={activeUserId ?? "__anonymous__"}
+        publicKey={PUBLIC_KEY}
+        apiBaseUrl={API_BASE_URL}
+        userId={activeUserId}
+        onError={(error) => console.warn("[Tranzmit]", error)}
+      >
+        <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+          <View style={styles.userBar}>
+            <Text style={styles.userBarLabel}>Custom user ID</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="e.g. user_12345"
+              style={styles.userInput}
+              value={userIdDraft}
+              onChangeText={setUserIdDraft}
+              onSubmitEditing={applyUserId}
+              returnKeyType="done"
+            />
+            <View style={styles.userActions}>
+              <View style={styles.userActionButton}>
+                <Button title="Apply" onPress={applyUserId} />
+              </View>
+              <View style={styles.userActionButton}>
+                <Button title="Clear (logged out)" onPress={clearUserId} />
+              </View>
+            </View>
+            <Text style={styles.userHint}>
+              Active: {activeUserId || "(none — SDK uses stableID)"}. Applying re-inits Tranzmit with the new identity.
+            </Text>
+          </View>
+          <DemoControls activeUserId={activeUserId} />
+        </SafeAreaView>
+      </TranzmitProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -169,5 +222,40 @@ const styles = StyleSheet.create({
   note: {
     color: "#6b7280",
     lineHeight: 20,
+  },
+  userBar: {
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+    backgroundColor: "#fff",
+    borderBottomColor: "#e5e7eb",
+    borderBottomWidth: 1,
+  },
+  userBarLabel: {
+    color: "#374151",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  userInput: {
+    borderColor: "#d1d5db",
+    borderRadius: 10,
+    borderWidth: 1,
+    color: "#111827",
+    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  userActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  userActionButton: {
+    flex: 1,
+  },
+  userHint: {
+    color: "#6b7280",
+    fontSize: 12,
+    lineHeight: 18,
   },
 });
