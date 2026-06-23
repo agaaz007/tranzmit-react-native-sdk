@@ -2,6 +2,18 @@
 
 All notable changes to the Tranzmit React Native SDK packages (`@tranzmit/react-native`, `@tranzmit/shared`) are documented here. Dates are UTC and correspond to the npm publish time.
 
+## [react-native 0.2.2] - 2026-06-24
+
+### Added
+
+- **Deterministic full-bleed rendering for imported phone artboards.** Documents authored as a `.device` → `.screen` → `.content` "phone mockup" (e.g. the exported HiAstro / Love Clarity paywalls) are now auto-detected and, in-app, flattened to full-bleed: the bezel is removed, `.screen` is sized to the real viewport and scrolls instead of clipping, `.content` is centered, and the `--tz-safe-*` insets are consumed. This fixes the previous divergence where such documents rendered correctly in a browser but, in the app, showed a centered bezel mockup on devices wider than 390px (e.g. iPhone 16 Pro Max, iPad) — because the document's own `@media (max-width: 390px)` full-bleed rule never fired — and clipped the CTA / left a sparse gap on other sizes. Detection and rules live in `phoneArtboardCss()` / `isPhoneArtboard()`.
+- **`tz-template`** standard paywall structure (`templates/paywall.css` + `paywall.html`): a three-band layout that fills the viewport with a centered, evenly-spaced value region, scales via `clamp()` + `--tz-scale`, consumes safe-area, and compacts gracefully on short screens.
+- **App-faithful preview harness** (`templates/preview/`, `npm run preview`): renders any paywall through the SDK's real composer at multiple device viewports plus a raw-browser view, so the preview matches the app.
+
+### Changed
+
+- Extracted the platform-agnostic document composition pipeline into `packages/react-native/src/renderer/compose.ts` (`renderDocument`, viewport/safe-area/artboard CSS, personalization, localization wiring). `SpecRenderer.tsx` now resolves the React Native viewport and delegates to it; composed output is unchanged for existing documents. This is what lets the preview harness compose through the exact same code the app runs.
+
 ## [react-native 0.2.1] - 2026-06-23
 
 ### Fixed

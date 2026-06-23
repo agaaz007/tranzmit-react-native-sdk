@@ -1,0 +1,104 @@
+/* ============================================================================
+   Tranzmit standard paywall template — "tz-template"
+   ----------------------------------------------------------------------------
+   A FIXED STRUCTURE you drop any paywall into. It owns the parts that make
+   paywalls render differently in the app than in a browser:
+
+     - fills the viewport and keeps the value region vertically CENTERED with
+       even spacing (no single pooled gap, no sparse upper half);
+     - consumes the SDK safe-area insets (--tz-safe-*) so nothing hides under
+       the notch or the home indicator;
+     - scales type / spacing / media smoothly across devices via clamp() and
+       the SDK's --tz-scale, and compacts gracefully on short screens.
+
+   You bring the SKIN (colors, fonts, borders, imagery). Keep the structure:
+
+     <main class="tz-template">
+       <header class="tz-band tz-band--top">   ... promo / headline group ...
+       <section class="tz-band tz-band--focus"> ... media / value / offer  ...
+       <footer class="tz-band tz-band--bottom"> ... guarantee / CTA / legal ...
+     </main>
+
+   Required slots: .tz-headline and .tz-cta. Everything else is optional and
+   collapses cleanly when absent (flex `gap` only applies between present
+   children, so missing slots leave no phantom space).
+
+   SDK-provided variables you may read (do NOT redefine them):
+     --tz-vw --tz-vh           actual WebView width / height in px
+     --tz-safe-top/-bottom/-left/-right   device safe-area insets in px
+     --tz-scale                0.82..1.12 device-size correction factor
+   ========================================================================== */
+
+.tz-template {
+  /* One fluid scale knob, anchored to the SDK's device-size factor. */
+  --s: var(--tz-scale, 1);
+
+  --tz-step-legal: clamp(11px, calc(2.9vw * var(--s)), 13px);
+  --tz-step-body:  clamp(13px, calc(3.6vw * var(--s)), 15px);
+  --tz-step-cta:   clamp(15px, calc(4.2vw * var(--s)), 18px);
+  --tz-step-head:  clamp(26px, calc(7.6vw * var(--s)), 36px);
+  --tz-gap:        clamp(8px, 1.6vh, 18px);
+  --tz-pad-x:      clamp(16px, 5vw, 24px);
+  --tz-radius:     clamp(16px, 5vw, 24px);
+  --tz-media-h:    clamp(90px, 20vh, 190px);
+
+  box-sizing: border-box;
+  /* 100svh is the authoritative full-viewport height for a mobile WebView and
+     also tells the SDK this document manages its own safe area. */
+  min-height: 100svh;
+  min-height: var(--tz-vh, 100svh);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--tz-gap);
+
+  /* The template consumes safe-area insets itself (the SDK does not inject body
+     padding for full-height documents). */
+  padding-top:    calc(var(--tz-safe-top, 0px)    + clamp(12px, 2.4vh, 22px));
+  padding-bottom: calc(var(--tz-safe-bottom, 0px) + clamp(12px, 2vh, 20px));
+  padding-left:   calc(var(--tz-safe-left, 0px)   + var(--tz-pad-x));
+  padding-right:  calc(var(--tz-safe-right, 0px)  + var(--tz-pad-x));
+}
+.tz-template *,
+.tz-template *::before,
+.tz-template *::after { box-sizing: border-box; }
+
+/* ---- The three bands: top pinned, bottom pinned, focus grows & centers ---- */
+.tz-band { display: flex; flex-direction: column; gap: var(--tz-gap); }
+.tz-band--top    { flex: 0 0 auto; }
+.tz-band--bottom { flex: 0 0 auto; }
+
+/* The ONLY elastic band. All slack goes here, and `justify-content: center`
+   splits it evenly above and below the value cluster — so the content sits in
+   the optical center with symmetric breathing room at any viewport height,
+   instead of pooling into one gap. */
+.tz-band--focus {
+  flex: 1 1 auto;
+  min-height: 0;
+  justify-content: center;
+}
+
+/* ---- Slot resets (layout only; you supply the skin) ----------------------- */
+.tz-headline { margin: 0; font-size: var(--tz-step-head); line-height: 1.08; letter-spacing: -0.02em; }
+.tz-subhead  { margin: 0; font-size: var(--tz-step-body); line-height: 1.4; }
+.tz-cta {
+  width: 100%; border: 0; cursor: pointer; border-radius: 999px;
+  font-size: var(--tz-step-cta); font-weight: 800; padding: clamp(14px, 1.9vh, 18px);
+}
+.tz-legal {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 14px;
+  margin: 0; padding: 0; list-style: none; font-size: var(--tz-step-legal);
+}
+.tz-media { display: flex; justify-content: center; }
+.tz-media img, .tz-media svg { max-height: var(--tz-media-h); width: auto; }
+
+/* ---- Graceful compaction on short viewports (design-agnostic) ------------- */
+@media (max-height: 740px) {
+  .tz-template { --tz-gap: clamp(5px, 0.9vh, 10px); --tz-media-h: clamp(70px, 15vh, 120px); }
+  .tz-template .tz-band--focus { justify-content: flex-start; } /* pack from top; never overflow the CTA */
+  .tz-template .tz-proof { display: none; }                     /* drop the most expendable slot first */
+}
+@media (max-height: 600px) {
+  .tz-template .tz-media { display: none; }                     /* then the hero image */
+  .tz-template { --tz-step-head: clamp(22px, 7vw, 28px); }
+}
