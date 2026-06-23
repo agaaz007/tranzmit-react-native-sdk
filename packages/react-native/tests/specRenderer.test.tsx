@@ -325,6 +325,42 @@ describe("SpecRenderer", () => {
     expect(html).not.toContain("Save <50%>");
   });
 
+  it("applies native safe-area insets to hosted (unmanaged) documents", () => {
+    const html = composeDocumentForTest(baseSpec, "sheet", {
+      width: 412,
+      height: 800,
+      safeTop: 24,
+      safeBottom: 18,
+      safeLeft: 0,
+      safeRight: 0,
+      pixelRatio: 2.75,
+      scale: 1,
+      presentation: "sheet",
+    });
+
+    expect(html).toContain("safe-area insets for hosted documents");
+    expect(html).toContain(
+      "padding-top: max(env(safe-area-inset-top, 0px), var(--tz-safe-top, 0px)) !important",
+    );
+    expect(html).toContain(
+      "padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tz-safe-bottom, 0px)) !important",
+    );
+  });
+
+  it("does not add document-wide safe-area padding for managed paywall containers", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main class="tranzmit-paywall"><button data-tranzmit-action="cta">Continue</button></main>',
+        },
+      },
+      "sheet",
+    );
+
+    expect(html).not.toContain("safe-area insets for hosted documents");
+  });
+
   it("does not flatten imported phone artboards with fullscreen overrides", () => {
     const html = composeDocumentForTest(
       {

@@ -5,6 +5,16 @@ export type {
   PaywallLocalization,
 } from "./spec.js";
 
+export {
+  extractLocalizationTokens,
+  extractRelativeAssetReferences,
+  localizeHtml,
+  resolveLocalizedStrings,
+  validateLocalizationCoverage,
+  type LocalizationIssue,
+  type LocalizationValidationResult,
+} from "./localization.js";
+
 export type {
   PlatformAdapter,
   PlatformMetadata,

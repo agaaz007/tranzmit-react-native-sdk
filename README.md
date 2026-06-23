@@ -574,25 +574,25 @@ Notes:
 3. `<img>` loads are subresources and do not require CORS on your API. They must be HTTPS (`mixedContentMode` is `never`).
 4. If you need the backend to choose the entire URL, your paywall JS can `fetch()` your API for the URL, but that path requires your API to send `Access-Control-Allow-Origin` because the WebView origin is `about:blank`.
 
-## Routing by category (dynamic traits)
+## Routing by language and intent (dynamic traits)
 
-Use this when the paywall a user should see depends on something you learn **during the session** — for example a `category` of `love` / `marriage` / `wealth` your backend returns partway through an onboarding chat. You keep **one** dashboard trigger (e.g. `upgrade_pro`) and let Tranzmit re-route it to the right paywall (experiment or multi-armed bandit) based on a trait you set at runtime with `setTraits`.
+Use this when the paywall a user should see depends on something you learn **during the session** — for example the user's `language` and purchase `intent` from an onboarding chat or quiz. You keep **one** dashboard trigger (e.g. `upgrade_pro`) and let Tranzmit re-route it to the right Statsig experiment or paywall based on traits you set at runtime with `setTraits`.
 
 Key idea: **initializing the SDK is not the same as showing a paywall.** The provider mounts once at launch and renders nothing until you call `gate()`. So the flow is three distinct moments:
 
 | Moment | You call | What happens |
 |---|---|---|
 | App launch | mount `<TranzmitProvider>` | One bootstrap fetch. The trigger resolves to a **default/holdout** paywall. Nothing is shown. |
-| Mid-session (category known) | `await setTraits({ category })` | Refetches config with the trait so the backend re-routes the trigger, then warms (hydrates) the routed paywall. |
+| Mid-session (language and intent known) | `await setTraits({ language, intent })` | Refetches config with the traits so the backend re-routes the trigger, then warms (hydrates) the routed paywall. |
 | Upgrade moment | `gate("upgrade_pro", …)` | Presents the warmed paywall instantly — no spinner. |
 
 ### Part A — Tranzmit dashboard / backend setup (one time)
 
 You (the Tranzmit team) do this once; the customer app does not touch it.
 
-1. **Create one trigger** (e.g. `upgrade_pro`). Do not create a separate trigger per category.
-2. **Add a default/holdout paywall** that the trigger returns when the routing trait is absent. This is what the app shows if the category call is slow, fails, or hasn't run yet — so it must be a real, sellable paywall.
-3. **Add a routing rule** so `/v1/config` reads `traits.category` and selects the matching experiment / multi-armed bandit (e.g. `love` → bandit A, `marriage` → bandit B, `wealth` → bandit C).
+1. **Create one trigger** (e.g. `upgrade_pro`). Do not create a separate trigger per language or intent.
+2. **Add a default/holdout paywall** that the trigger returns when routing traits are absent. This is what the app shows if the classification call is slow, fails, or hasn't run yet — so it must be a real, sellable paywall.
+3. **Add targeting rules** so `/v1/config` reads `traits.language` and `traits.intent`, then selects the matching Statsig experiment / multi-armed bandit (e.g. `{ language: "hi", intent: "wealth" }` → `paywall_hi_wealth`).
 4. **Bucket assignment on the custom ID `stableID`** so a user keeps the same variant across sessions and across login/logout.
 5. **Set a Billing Product ID on every variant** in every bandit (see [Step 2](#step-2-configure-billing-product-ids-in-tranzmit)).
 
@@ -600,17 +600,17 @@ Assignment stays server-side. The app never talks to Statsig and never picks a v
 
 ### Part B — Customer app setup (step by step)
 
-**Step 1 — Mount the provider at launch (already done in [Step 5](#step-5-wrap-the-root-app)).** No category yet; the trigger resolves to the default paywall in the background.
+**Step 1 — Mount the provider at launch (already done in [Step 5](#step-5-wrap-the-root-app)).** No language/intent routing traits yet; the trigger resolves to the default paywall in the background.
 
-**Step 2 — When your backend knows the category, call `setTraits`.** This is *your* API call (Tranzmit does not call your endpoint). Awaiting `setTraits` means "the routed paywall is now warm in cache."
+**Step 2 — When your app knows the language and intent, call `setTraits`.** This is *your* classification flow (Tranzmit does not call your endpoint). Awaiting `setTraits` means "the routed paywall is now warm in cache."
 
 ```tsx
 const { setTraits, gate } = useTranzmit();
 
 // Example: fired ~30s into the onboarding chat, as soon as you can classify.
-async function onCategoryResolved() {
-  const category = await fetchCategoryFromYourBackend(); // "love" | "marriage" | "wealth"
-  await setTraits({ category });
+async function onRoutingTraitsResolved() {
+  const { language, intent } = await classifyUserIntent(); // e.g. "hi", "wealth"
+  await setTraits({ language, intent });
 }
 ```
 
@@ -635,12 +635,12 @@ function onPaywallMoment() {
 }
 ```
 
-**Step 4 — Handle the slow/failed category path.** You do not need extra error handling: if the category call is slow or fails, just call `gate()` anyway. It shows whatever the trigger currently resolves to (the launch-time default), and if no placement exists at all it calls `onFallback`. Optionally wrap the call so a slow backend never blocks the paywall:
+**Step 4 — Handle the slow/failed classification path.** You do not need extra error handling: if classification is slow or fails, just call `gate()` anyway. It shows whatever the trigger currently resolves to (the launch-time default), and if no placement exists at all it calls `onFallback`. Optionally wrap the call so a slow classification step never blocks the paywall:
 
 ```tsx
 try {
   await Promise.race([
-    onCategoryResolved(),
+    onRoutingTraitsResolved(),
     new Promise((r) => setTimeout(r, 1500)), // cap the wait; fall back to default
   ]);
 } catch {
@@ -653,7 +653,7 @@ onPaywallMoment();
 
 1. `setTraits(traits, options?)` **merges** into existing traits by default; pass `{ merge: false }` to replace them entirely. Traits go on the `/v1/config` request (so the backend can route) and on analytics events (so conversions are attributed).
 2. It refetches and hydrates **in place without flipping `isReady`**, so an already-presented paywall is never torn down.
-3. Calling `setTraits` again with a new category re-routes and re-warms; the latest call wins.
+3. Calling `setTraits` again with new `language` or `intent` values re-routes and re-warms; the latest call wins.
 4. Traits set via `setTraits` **persist across internal re-initialization** (for example when the `userId` or `userTraits` props change).
 5. If `setTraits` fails (network), the previously hydrated config is left intact so `gate()` still works.
 
@@ -667,27 +667,76 @@ This means: same document, same integrity hash, all languages — and switching 
 
 **Step 1 — Tokenize the hosted document.** Replace every user-visible string with a `{{key}}` token. Tokens work in text *and* in attributes like `alt` or `aria-label`.
 
+For reusable localized paywalls, ship this as a file named `paywall.html`. Use one layout only. Token names must use word characters only (`snake_case` is recommended), because SDKs resolve tokens with the `{{token_name}}` form.
+
 ```html
-<h1>{{headline}}</h1>
-<p>{{subtitle}}</p>
-<img data-tranzmit-src="https://cdn.yourapp.com/hero.png" alt="{{hero_alt}}" />
-<button data-tranzmit-action="cta" data-product-id="pro_monthly">{{cta}}</button>
+<!-- paywall.html -->
+<main aria-label="{{paywall_aria_label}}">
+  <h1>{{headline_prefix}} <span>{{headline_highlight}}</span></h1>
+  <p>{{subtitle}}</p>
+  <img data-tranzmit-src="https://cdn.yourapp.com/hero.png" alt="{{hero_alt}}" />
+  <button data-tranzmit-action="cta" data-product-id="pro_monthly">{{cta}}</button>
+</main>
 ```
 
-**Step 2 — Add a `localization` block to the spec** (managed in the dashboard, delivered in the normal `/v1/config` payload). Provide a `defaultLocale` and a `translations` map keyed by locale, with one entry per token.
+Do not leave local relative image paths such as `assets/hero.png` in production HTML. Use embedded `data:` URIs or public `https://...` URLs so the hosted WebView can load the asset.
+
+**Step 2 — Add translations.** In the dashboard, upload `paywall.html` plus a `translations.json` file. The dashboard stores the strings on `spec.localization`, delivered in the normal `/v1/config` payload. Provide a `defaultLocale` and a `translations` map keyed by locale, with one entry per token.
 
 ```jsonc
-"localization": {
-  "defaultLocale": "en",
+// translations.json
+{
+  "name": "HiAstro Expert Predictions Paywall",
+  "defaultLocale": "hi-en",
   "translations": {
-    "en": { "headline": "Unlock Pro", "subtitle": "Everything, no limits", "cta": "Start free trial", "hero_alt": "Pro features" },
-    "es": { "headline": "Desbloquea Pro", "subtitle": "Todo, sin límites",    "cta": "Comienza la prueba", "hero_alt": "Funciones Pro" },
-    "hi": { "headline": "प्रो अनलॉक करें", "subtitle": "सब कुछ, बिना सीमा",     "cta": "मुफ़्त ट्रायल शुरू करें", "hero_alt": "प्रो फ़ीचर्स" }
-  }
+    "hi-en": {
+      "paywall_aria_label": "HiAstro expert predictions paywall",
+      "headline_prefix": "Apni Kundli ke Experts se",
+      "headline_highlight": "Sahi Predictions Paayein",
+      "subtitle": "50 Lakh+ logon ka bharosa - zindagi ke har sawaal ka jawaab",
+      "hero_alt": "Astrology expert illustration",
+      "cta": "Abhi Premium Shuru Karein"
+    },
+    "en": {
+      "paywall_aria_label": "HiAstro expert predictions paywall",
+      "headline_prefix": "Get Accurate Predictions from",
+      "headline_highlight": "Expert Astrologers",
+      "subtitle": "Trusted by 50L+ users for cosmic clarity and life decisions",
+      "hero_alt": "Astrology expert illustration",
+      "cta": "Unlock HiAstro Premium"
+    }
+  },
+  "products": [
+    {
+      "id": "pro_monthly",
+      "name": "Pro Monthly",
+      "price": "₹49 trial",
+      "description": "then ₹499/month"
+    }
+  ],
+  "templateId": "hiastro_expert_predictions_paywall",
+  "presentation": { "mode": "sheet" }
 }
 ```
 
-Every key used as a `{{token}}` in the document should exist in `defaultLocale` so there is always a safe fallback.
+Every key used as a `{{token}}` in `paywall.html` must exist in every locale map. At minimum, every key must exist in `defaultLocale` so there is always a safe fallback. The dashboard validates missing tokens before save.
+
+For automation, the admin API can send the same shape as a single JSON payload by including `html` and `localization`:
+
+```jsonc
+{
+  "name": "Localized Paywall",
+  "html": "<main><h1>{{headline}}</h1></main>",
+  "localization": {
+    "defaultLocale": "hi-en",
+    "translations": {
+      "hi-en": { "headline": "Premium shuru karein" },
+      "en": { "headline": "Start Premium" }
+    }
+  },
+  "products": [{ "id": "pro_monthly", "name": "Pro Monthly", "price": "₹49 trial" }]
+}
+```
 
 ### Part B — Customer app setup
 
