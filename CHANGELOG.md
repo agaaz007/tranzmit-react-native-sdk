@@ -1,18 +1,25 @@
 # Changelog
 
-## 0.1.0
+All notable changes to the Tranzmit React Native SDK packages (`@tranzmit/react-native`, `@tranzmit/shared`) are documented here. Dates are UTC and correspond to the npm publish time.
 
-First public npm release of `@tranzmit/react-native` and `@tranzmit/shared`.
+## [react-native 0.2.1] - 2026-06-23
 
-- Initial standalone React Native SDK workspace extracted from `tranzmit-mobile-webview`.
-- Ships `@tranzmit/react-native` and `@tranzmit/shared` together in one source workspace.
-- Uses hosted WebView paywalls as the supported rendering path.
-- Adds per-user paywall personalization: exposes the resolved user id (`window.Tranzmit.user`) to the WebView and resolves `data-tranzmit-src` token templates (`{id}`, `{userId}`, `{stableID}`) into a baked `src` at compose time, so personalized images (for example from a customer API) load at the earliest possible moment without breaking document integrity.
-- Adds `data-tranzmit-fallback-src` so personalized images fall back to a default image on load error (network failure, 404, missing identity), with self-clearing `onerror` to avoid retry loops.
-- Adds paywall localization: a `locale` prop on `TranzmitProvider` plus `spec.localization` translations, substituted into `{{key}}` document tokens at compose time with base-language and default-locale fallbacks. One design and one integrity hash serve all languages.
-- Adds `setTraits(traits, options?)` (on the context and shared client) to update user traits after init and refetch config in place, so the backend can re-route a trigger to the right experiment/multi-armed bandit (for example by a session-derived `category`). It resolves after document hydration and does not flip `isReady`, so paywalls can be warmed mid-session and presented instantly.
-- Enforces SHA-256 integrity validation for hosted WebView paywall documents before caching or rendering.
-- Restricts WebView navigation, file access, mixed content, cookies, popup windows, and external URL opens.
-- Adds explicit fallback reasons for `not_ready`, `placement_not_found`, `render_error`, integrity failures, invalid paywalls, and unsupported bridge versions.
-- Documents billing-provider authority for prices, trials, billing periods, and checkout terms.
-- Documents semantic versioning and release expectations for customer-facing SDK releases.
+### Fixed
+
+- Hosted documents that size a shell to the full viewport (`min-height: 100svh` / `100dvh` / `100vh`) no longer receive document-level `body` safe-area padding. Previously the rigid full-height shell would overflow the viewport by the inset amount and clip its own footer/CTA below the fold. Such documents are now expected to consume the `--tz-safe-*` variables inside their own `border-box` layout (detected via `FULL_VIEWPORT_HEIGHT_PATTERN`).
+- Increased the hosted-document bottom safe-area inset by a responsive `clamp(10px, 3vw, 16px)` so CTAs keep a comfortable, device-scaled gap above the home indicator.
+
+## [react-native 0.2.0 / shared 0.2.0] - 2026-06-23
+
+### Added
+
+- Generic WebView safe-area handling: hosted (unmanaged) documents receive native status-bar / notch / home-indicator insets via the `--tz-safe-*` CSS variables and `env(safe-area-inset-*)`, while managed containers (`.tranzmit-paywall` / `.tz-paywall`) continue to manage insets themselves.
+- Shared localization utilities (`localizeHtml`, `resolveLocalizedStrings`, and token extraction) supporting `{{token}}`-based client-side localization driven by the `locale` prop and `spec.localization.translations`.
+
+## [react-native 0.1.1 / shared 0.1.1] - 2026-06-18
+
+- Documented the npm publishing workflow and aligned customer-facing docs.
+
+## [react-native 0.1.0 / shared 0.1.0] - 2026-06-17
+
+- Initial public npm releases of `@tranzmit/react-native` and `@tranzmit/shared`.

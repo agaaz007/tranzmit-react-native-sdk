@@ -565,6 +565,12 @@ function fallbackViewport(presentation: PresentationMode): PaywallViewportContra
 // `--tz-safe-*` variables internally, so they must not get a second, document-wide inset.
 const MANAGED_CONTAINER_PATTERN = /\b(?:tranzmit-paywall|tz-paywall)\b/;
 
+// Documents that size a shell to the full viewport (e.g. `min-height: 100svh/100dvh/100vh`) cannot
+// receive a document-level `body` inset: the rigid full-height shell would then overflow the viewport
+// by the inset amount and clip its own footer (CTA) below the fold. Such documents are expected to
+// consume the `--tz-safe-*` variables inside their own border-box layout instead.
+const FULL_VIEWPORT_HEIGHT_PATTERN = /\b100(?:svh|dvh|vh)\b/;
+
 // Hosted documents that bring their own full-bleed layout (e.g. `.device`/`.screen` shells) never
 // reference the safe-area variables themselves, so their first row can slide under the status bar
 // or notch and their footer under the home indicator. When we detect such a document we apply the
@@ -572,11 +578,12 @@ const MANAGED_CONTAINER_PATTERN = /\b(?:tranzmit-paywall|tz-paywall)\b/;
 // document's own background still paints edge-to-edge (the padding area shows the body background).
 function hostedSafeAreaCss(html: string): string {
   if (MANAGED_CONTAINER_PATTERN.test(html)) return "";
+  if (FULL_VIEWPORT_HEIGHT_PATTERN.test(html)) return "";
   return `  /* Tranzmit safe-area insets for hosted documents (status bar, notch, home indicator) */
   body {
     padding-top: max(env(safe-area-inset-top, 0px), var(--tz-safe-top, 0px)) !important;
     padding-right: max(env(safe-area-inset-right, 0px), var(--tz-safe-right, 0px)) !important;
-    padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tz-safe-bottom, 0px)) !important;
+    padding-bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--tz-safe-bottom, 0px)) + clamp(10px, 3vw, 16px)) !important;
     padding-left: max(env(safe-area-inset-left, 0px), var(--tz-safe-left, 0px)) !important;
   }`;
 }

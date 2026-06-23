@@ -16,11 +16,33 @@ const PUBLIC_KEY = process.env.EXPO_PUBLIC_TRANZMIT_PUBLIC_KEY || "pk_test_320da
 const TRIGGER = process.env.EXPO_PUBLIC_TRANZMIT_TRIGGER || "upgrade_pro";
 const DEFAULT_USER_ID = process.env.EXPO_PUBLIC_TRANZMIT_USER_ID || "react-native-sdk-harness";
 
+const INTENTS: Array<{ label: string; value: string }> = [
+  { label: "Marriage", value: "marriage" },
+  { label: "Love & Relationship", value: "love_and_relationship" },
+  { label: "Career & Education", value: "career_education" },
+  { label: "General", value: "general" },
+];
+
 function DemoControls({ activeUserId }: { activeUserId?: string }) {
-  const { gate, getPlacement, isReady, refreshConfig, reportConversion, track, user } = useTranzmit();
+  const { gate, getPlacement, isReady, refreshConfig, reportConversion, setTraits, track, user } = useTranzmit();
   const [showInline, setShowInline] = useState(false);
   const [lastEvent, setLastEvent] = useState<string | null>(null);
+  const [activeIntent, setActiveIntent] = useState<string | null>(null);
+  const [routing, setRouting] = useState(false);
   const placement = getPlacement(TRIGGER);
+
+  const chooseIntent = async (intent: string) => {
+    setRouting(true);
+    try {
+      await setTraits({ intent });
+      setActiveIntent(intent);
+      record(`Intent set: ${intent} (config refetched)`);
+    } catch (error) {
+      record(`Intent routing failed: ${String(error)}`);
+    } finally {
+      setRouting(false);
+    }
+  };
 
   const record = (message: string) => {
     setLastEvent(message);
@@ -71,6 +93,29 @@ function DemoControls({ activeUserId }: { activeUserId?: string }) {
           <StatusRow label="Resolved ID" value={user?.id || "-"} />
           <StatusRow label="Stable ID" value={user?.stableID || "-"} />
           {lastEvent ? <StatusRow label="Last event" value={lastEvent} /> : null}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.eyebrow}>Intent (routing)</Text>
+          <Text style={styles.note}>
+            Pick an intent to set the routing trait and refetch the routed paywall. Then tap Present.
+          </Text>
+          <View style={styles.intentGrid}>
+            {INTENTS.map((item) => {
+              const selected = activeIntent === item.value;
+              return (
+                <Text
+                  key={item.value}
+                  onPress={routing || !isReady ? undefined : () => void chooseIntent(item.value)}
+                  style={[styles.intentChip, selected && styles.intentChipActive, (routing || !isReady) && styles.intentChipDisabled]}
+                >
+                  {item.label}
+                </Text>
+              );
+            })}
+          </View>
+          <StatusRow label="Active intent" value={activeIntent || "(none — default paywall)"} />
+          {routing ? <StatusRow label="Status" value="Routing…" /> : null}
         </View>
 
         <View style={styles.card}>
@@ -257,5 +302,30 @@ const styles = StyleSheet.create({
     color: "#6b7280",
     fontSize: 12,
     lineHeight: 18,
+  },
+  intentGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  intentChip: {
+    overflow: "hidden",
+    borderColor: "#d1d5db",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    color: "#374151",
+    fontSize: 13,
+    fontWeight: "600",
+    backgroundColor: "#fff",
+  },
+  intentChipActive: {
+    borderColor: "#e9650c",
+    backgroundColor: "#fdebd9",
+    color: "#b8470a",
+  },
+  intentChipDisabled: {
+    opacity: 0.5,
   },
 });

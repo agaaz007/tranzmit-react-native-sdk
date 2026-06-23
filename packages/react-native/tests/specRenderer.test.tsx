@@ -343,7 +343,7 @@ describe("SpecRenderer", () => {
       "padding-top: max(env(safe-area-inset-top, 0px), var(--tz-safe-top, 0px)) !important",
     );
     expect(html).toContain(
-      "padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tz-safe-bottom, 0px)) !important",
+      "padding-bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--tz-safe-bottom, 0px)) + clamp(10px, 3vw, 16px)) !important",
     );
   });
 
@@ -353,6 +353,20 @@ describe("SpecRenderer", () => {
         ...baseSpec,
         document: {
           html: '<main class="tranzmit-paywall"><button data-tranzmit-action="cta">Continue</button></main>',
+        },
+      },
+      "sheet",
+    );
+
+    expect(html).not.toContain("safe-area insets for hosted documents");
+  });
+
+  it("does not add document-wide safe-area padding to full-height (100svh) documents", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<div class="device"><div class="screen" style="min-height: 100svh"><button data-tranzmit-action="cta">Continue</button></div></div>',
         },
       },
       "sheet",
