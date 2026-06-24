@@ -2,6 +2,13 @@
 
 All notable changes to the Tranzmit React Native SDK packages (`@tranzmit/react-native`, `@tranzmit/shared`) are documented here. Dates are UTC and correspond to the npm publish time.
 
+## [react-native 0.2.3] - 2026-06-24
+
+### Changed
+
+- **Bigger, more commanding CTA inside flattened artboard paywalls.** The flatten layer now enlarges `.cta` to `min-height: clamp(60px, 7.5vh, 72px)`, `font-size: clamp(16px, 4.4vw, 19px)`, and `padding: clamp(16px, 2vh, 22px) clamp(20px, 5vw, 28px)`, with the same overrides applied to a nested `.cta-label`. Resolves to ~60px / 16px on iPhone SE, ~63px / 17px on iPhone 14, ~70px / 19px on 16 Pro Max, capped at 72px / 19px on tablets. Improves tap target reach and perceived importance; each design's colors/radius/gradient are preserved.
+- Same overrides baked into `templates/bake-flatten.mjs` so a Railway document hotfix carries the CTA upgrade independent of SDK version.
+
 ## [react-native 0.2.2] - 2026-06-24
 
 ### Added
