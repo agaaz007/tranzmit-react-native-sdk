@@ -1,0 +1,46 @@
+{
+  "name": "Standard paywall template example",
+  "defaultLocale": "en",
+  "translations": {
+    "en": {
+      "paywall_aria_label": "Premium upgrade paywall",
+      "promo": "Offer ends in 14:54 · 7,821 joined today",
+      "eyebrow": "Limited time",
+      "headline_prefix": "Get accurate predictions from",
+      "headline_highlight": "expert astrologers",
+      "subhead": "Trusted by 50L+ users for clarity on life's big decisions",
+      "hero_alt": "Astrology expert illustration",
+      "plan_name": "Premium Pack",
+      "price": "₹49 today",
+      "price_note": "then ₹499/month",
+      "social_proof": "\"Found the perfect muhurat for my wedding here.\" — Priya, Delhi",
+      "guarantee": "No hidden charges · cancel anytime",
+      "cta": "Start Premium",
+      "legal_1": "1-day trial",
+      "legal_2": "100% private & safe",
+      "legal_3": "Cancel anytime"
+    },
+    "hi-en": {
+      "paywall_aria_label": "Premium upgrade paywall",
+      "promo": "Offer ends in 14:54 · 7,821 joined today",
+      "eyebrow": "Limited time",
+      "headline_prefix": "Apni Kundli ke Experts se",
+      "headline_highlight": "Sahi Predictions Paayein",
+      "subhead": "50 Lakh+ logon ka bharosa — zindagi ke har sawaal ka jawaab",
+      "hero_alt": "Astrology expert illustration",
+      "plan_name": "Premium Pack",
+      "price": "₹49 today",
+      "price_note": "then ₹499/month",
+      "social_proof": "\"Maine apni shaadi ka sahi muhurat yahin se nikalwaaya.\" — Priya, Delhi",
+      "guarantee": "Koi hidden charges nahi · kabhi bhi cancel karein",
+      "cta": "Abhi Premium Shuru Karein",
+      "legal_1": "1-day trial",
+      "legal_2": "100% gupt aur safe",
+      "legal_3": "Kabhi bhi cancel karein"
+    }
+  },
+  "products": [
+    { "id": "pro_monthly", "name": "Premium Pack", "price": "₹49 trial", "description": "then ₹499/month" }
+  ],
+  "presentation": { "mode": "fullscreen" }
+}

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { Linking } from "react-native";
 import { composeDocumentForTest, SpecRenderer } from "../src/renderer/SpecRenderer.js";
+import { isPhoneArtboard } from "../src/renderer/compose.js";
 import { baseSpec } from "./fixtures.js";
 
 describe("SpecRenderer", () => {
@@ -390,5 +391,58 @@ describe("SpecRenderer", () => {
     expect(html).toContain(".tz-presentation-fullscreen .tz-paywall:not(.phone)");
     expect(html).not.toContain(".tz-presentation-fullscreen .tz-paywall,\n  .tz-presentation-fullscreen .tranzmit-paywall");
     expect(html).toContain(".phone{width:412px;height:920px;border-radius:54px;box-shadow:0 0 0 11px #0c0815}");
+  });
+
+  it("flattens imported phone artboards (.device > .screen) to full-bleed in-app", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<div class="device"><main class="screen" aria-label="x"><div class="content"><button class="cta" data-tranzmit-action="cta">Go</button></div></main></div>',
+          css: ".device{width:min(410px,calc(100vw - 20px))}.screen{min-height:705px}",
+        },
+      },
+      "fullscreen",
+    );
+
+    expect(html).toContain("flatten imported phone artboards");
+    expect(html).toContain("height: var(--tz-vh) !important");
+    // The artboard rules consume the safe area themselves, so no document-wide body inset is added.
+    expect(html).not.toContain("safe-area insets for hosted documents");
+  });
+
+  it("flattens the .paywall-screen artboard variant", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<div class="device"><main class="paywall-screen"><div class="content"></div></main></div>',
+        },
+      },
+      "fullscreen",
+    );
+
+    expect(html).toContain("flatten imported phone artboards");
+  });
+
+  it("does not flatten documents that are not phone artboards", () => {
+    const html = composeDocumentForTest(
+      {
+        ...baseSpec,
+        document: {
+          html: '<main class="tz-template"><button class="tz-cta" data-tranzmit-action="cta">Go</button></main>',
+        },
+      },
+      "fullscreen",
+    );
+
+    expect(html).not.toContain("flatten imported phone artboards");
+  });
+
+  it("isPhoneArtboard detects the .device + .screen idiom and ignores others", () => {
+    expect(isPhoneArtboard('<div class="device"><div class="screen"></div></div>')).toBe(true);
+    expect(isPhoneArtboard('<div class="device"><main class="paywall-screen"></main></div>')).toBe(true);
+    expect(isPhoneArtboard('<main class="tz-template"></main>')).toBe(false);
+    expect(isPhoneArtboard('<div class="card"><div class="row"></div></div>')).toBe(false);
   });
 });

@@ -1,0 +1,65 @@
+<!--
+  Tranzmit standard paywall — reference skeleton (copy this, then fill it in).
+
+  HOW TO USE
+  1. Keep the three-band structure and the slot class names below.
+  2. Replace the {{tokens}} with your copy (and ship a translations.json — see
+     templates/translations.example.json and the SDK README "Localization").
+  3. Paste templates/paywall.css into the <style> below (the layout/scaling
+     engine), then add YOUR skin (colors, fonts, borders, imagery) after it.
+  4. Put the final HTML in spec.document.html and the CSS in spec.document.css
+     (or keep the <style> inline as shown — both work). Recompute the SHA-256
+     integrity for the document after every edit (see the README).
+
+  Required slots: .tz-headline and .tz-cta. Everything else is optional and
+  collapses cleanly when omitted. The CTA MUST carry data-tranzmit-action="cta"
+  and data-product-id so the SDK bridge fires onCTA with the right product.
+-->
+<main class="tz-template" aria-label="{{paywall_aria_label}}">
+  <header class="tz-band tz-band--top">
+    <div class="tz-promo">{{promo}}</div>
+    <div class="tz-eyebrow">{{eyebrow}}</div>
+    <h1 class="tz-headline">{{headline_prefix}} <span>{{headline_highlight}}</span></h1>
+    <p class="tz-subhead">{{subhead}}</p>
+  </header>
+
+  <section class="tz-band tz-band--focus">
+    <div class="tz-media">
+      <img data-tranzmit-src="https://cdn.yourapp.com/hero.png"
+           data-tranzmit-fallback-src="https://cdn.yourapp.com/hero-default.png"
+           alt="{{hero_alt}}" />
+    </div>
+
+    <div class="tz-value">
+      <!-- features / value props -->
+    </div>
+
+    <div class="tz-offer">
+      <strong>{{plan_name}}</strong>
+      <div class="tz-price">{{price}} <small>{{price_note}}</small></div>
+    </div>
+
+    <div class="tz-proof">{{social_proof}}</div>
+  </section>
+
+  <footer class="tz-band tz-band--bottom">
+    <p class="tz-guarantee">{{guarantee}}</p>
+    <button class="tz-cta" data-tranzmit-action="cta" data-product-id="pro_monthly">{{cta}}</button>
+    <ul class="tz-legal">
+      <li>{{legal_1}}</li>
+      <li>{{legal_2}}</li>
+      <li>{{legal_3}}</li>
+    </ul>
+  </footer>
+</main>
+
+<style>
+  /* 1) Paste the full contents of templates/paywall.css here (the layout +
+        scaling engine). It is design-agnostic; do not edit it per paywall. */
+
+  /* 2) Your skin below — colors, fonts, borders, images. Example: */
+  .tz-template { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1f2937; background: #fff; text-align: center; }
+  .tz-headline span { color: #ea580c; }
+  .tz-offer { text-align: left; border: 1px solid #e5e7eb; border-radius: var(--tz-radius); padding: clamp(14px, 2vh, 18px) 16px; }
+  .tz-cta { background: linear-gradient(90deg, #f97316, #ea580c); color: #fff; }
+</style>
