@@ -370,7 +370,19 @@ export function phoneArtboardCss(html: string): string {
   .screen > .content > :first-child, .paywall-screen > .content > :first-child,
   .screen > .sheet > :first-child, .paywall-screen > .sheet > :first-child { margin-top: auto !important; }
   .screen .cta, .paywall-screen .cta { margin-top: auto !important; }
-  .screen .cta ~ *, .paywall-screen .cta ~ * { margin-top: 0 !important; }`;
+  .screen .cta ~ *, .paywall-screen .cta ~ * { margin-top: 0 !important; }
+  /* Bigger, more commanding CTA: ~65px tall (dynamic with viewport), generous
+     padding, ~+20% type. Keeps each design's own colors / radius / gradient. */
+  .screen .cta, .paywall-screen .cta {
+    min-height: clamp(60px, 7.5vh, 72px) !important;
+    padding: clamp(16px, 2vh, 22px) clamp(20px, 5vw, 28px) !important;
+    font-size: clamp(16px, 4.4vw, 19px) !important;
+    line-height: 1.1 !important;
+  }
+  .screen .cta .cta-label, .paywall-screen .cta .cta-label {
+    font-size: clamp(16px, 4.4vw, 19px) !important;
+    line-height: 1.1 !important;
+  }`;
 }
 
 export function viewportCssVariables(viewport: PaywallViewportContract) {
