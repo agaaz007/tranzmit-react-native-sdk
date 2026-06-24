@@ -118,6 +118,7 @@ export default {
 
 The harness draws the status-bar and home-indicator zones and a red dashed
 safe-area edge, so content that would hide under the notch or home indicator is
-obvious. The two bundled samples (`astro-intro-offer` and `astro-template`) show
-the same content authored the old way vs. on `tz-template` — compare them across
-the device frames.
+obvious. Each paywall is shown as Raw (browser) / Before (fix off) / After (fix
+on) across the device frames. `real-hiastro.sample.mjs` loads the exported
+paywalls from `TZ_REAL_DIR` (defaults to the local Downloads folder; no-ops if
+absent).
