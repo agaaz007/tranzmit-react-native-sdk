@@ -336,35 +336,41 @@ export function phoneArtboardCss(html: string): string {
     background: transparent !important;
     box-shadow: none !important;
   }
+  /* .screen is the fixed-height scroll viewport. */
   .screen, .paywall-screen {
     height: var(--tz-vh) !important;
     min-height: var(--tz-vh) !important;
     max-height: var(--tz-vh) !important;
     border-radius: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
+    display: block !important;
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
   }
-  .screen > .content, .paywall-screen > .content, .screen .content {
-    flex: 1 0 auto !important;
-    min-height: 0 !important;
+  /* The content column is .content (most designs) or .sheet (love designs).
+     It fills the viewport (min-height:100%) so short content can pin its CTA to
+     the bottom, and grows + scrolls when content is taller than the viewport.
+     The safe-area insets live here so nothing hides under the notch / home bar. */
+  .screen > .content, .paywall-screen > .content, .screen > .sheet, .paywall-screen > .sheet {
+    box-sizing: border-box !important;
+    min-height: 100% !important;
+    margin: 0 !important;
     display: flex !important;
     flex-direction: column !important;
-    padding-top: calc(var(--tz-safe-top, 0px) + clamp(12px, 2.4vh, 20px)) !important;
-    padding-bottom: calc(var(--tz-safe-bottom, 0px) + clamp(12px, 2vh, 18px)) !important;
-    padding-left: calc(var(--tz-safe-left, 0px) + clamp(16px, 5vw, 22px)) !important;
-    padding-right: calc(var(--tz-safe-right, 0px) + clamp(16px, 5vw, 22px)) !important;
+    padding-top: calc(var(--tz-safe-top, 0px) + clamp(10px, 2vh, 18px)) !important;
+    padding-bottom: calc(var(--tz-safe-bottom, 0px) + clamp(10px, 1.6vh, 16px)) !important;
+    padding-left: calc(var(--tz-safe-left, 0px) + clamp(14px, 4.5vw, 20px)) !important;
+    padding-right: calc(var(--tz-safe-right, 0px) + clamp(14px, 4.5vw, 20px)) !important;
   }
   /* Keep the CTA in the bottom thumb zone while still centering the value
-     content. Two auto top-margins (first child + CTA) split the slack evenly:
-     half above the content, half above the CTA, so the CTA sits just above the
-     safe area on tall screens instead of floating in the middle with dead space
-     below it. When content exceeds the viewport the autos collapse to 0 and the
-     screen scrolls. */
-  .screen .content > :first-child, .paywall-screen .content > :first-child { margin-top: auto !important; }
-  .screen .content > .cta, .paywall-screen .content > .cta { margin-top: auto !important; }
-  .screen .content > .cta ~ *, .paywall-screen .content > .cta ~ * { margin-top: 0 !important; }`;
+     content. Two auto top-margins (first child + CTA) split the free space
+     evenly: half above the content, half above the CTA, so the CTA sits just
+     above the safe area on tall screens instead of floating in the middle with
+     dead space below it. When content exceeds the viewport the autos collapse to
+     0 and the column scrolls (the CTA + footer stay reachable, above the inset). */
+  .screen > .content > :first-child, .paywall-screen > .content > :first-child,
+  .screen > .sheet > :first-child, .paywall-screen > .sheet > :first-child { margin-top: auto !important; }
+  .screen .cta, .paywall-screen .cta { margin-top: auto !important; }
+  .screen .cta ~ *, .paywall-screen .cta ~ * { margin-top: 0 !important; }`;
 }
 
 export function viewportCssVariables(viewport: PaywallViewportContract) {
