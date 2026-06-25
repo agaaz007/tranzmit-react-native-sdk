@@ -19,7 +19,7 @@ const DEFAULT_USER_ID = process.env.EXPO_PUBLIC_TRANZMIT_USER_ID || "react-nativ
 const INTENTS: Array<{ label: string; value: string }> = [
   { label: "Marriage", value: "marriage" },
   { label: "Love & Relationship", value: "love_and_relationship" },
-  { label: "Career & Education", value: "career_education" },
+  { label: "Career & Education", value: "career_and_education" },
   { label: "General", value: "general" },
 ];
 
