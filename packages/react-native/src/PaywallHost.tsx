@@ -5,6 +5,15 @@ import { ModalPresenter } from "./presentation/ModalPresenter.js";
 import { SheetPresenter } from "./presentation/SheetPresenter.js";
 import type { ActivePaywall, PaywallUserContext, PreloadedPaywall, PresentationMode } from "./types.js";
 
+let useSafeAreaInsets: undefined | (() => { top: number; bottom: number; left: number; right: number });
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const safeArea = require("react-native-safe-area-context");
+  useSafeAreaInsets = safeArea.useSafeAreaInsets;
+} catch {
+  useSafeAreaInsets = undefined;
+}
+
 export interface PaywallHostProps {
   activePaywalls: ActivePaywall[];
   preloadedPaywalls?: PreloadedPaywall[];
@@ -28,6 +37,7 @@ export function PaywallHost({
   onPreloadReady,
   onPreloadError,
 }: PaywallHostProps) {
+  const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0, bottom: 0, left: 0, right: 0 };
   return (
     <>
       {preloadedPaywalls.map((preload) => {
@@ -54,7 +64,7 @@ export function PaywallHost({
                   accessibilityLabel="Dismiss paywall"
                   onPress={() => onDismiss(active)}
                   hitSlop={10}
-                  style={fullscreenCloseStyle}
+                  style={fullscreenCloseStyle(insets)}
                 >
                   <Text style={fullscreenCloseTextStyle}>×</Text>
                 </Pressable>
@@ -178,18 +188,20 @@ function backdropStyle(presentation: PresentationMode) {
   };
 }
 
-const fullscreenCloseStyle = {
-  alignItems: "center" as const,
-  backgroundColor: "transparent",
-  borderRadius: 16,
-  height: 32,
-  justifyContent: "center" as const,
-  left: 10,
-  position: "absolute" as const,
-  top: 10,
-  width: 32,
-  zIndex: 10,
-};
+function fullscreenCloseStyle(insets: { top: number; left: number }) {
+  return {
+    alignItems: "center" as const,
+    backgroundColor: "transparent",
+    borderRadius: 16,
+    height: 32,
+    justifyContent: "center" as const,
+    left: insets.left + 10,
+    position: "absolute" as const,
+    top: insets.top + 6,
+    width: 32,
+    zIndex: 10,
+  };
+}
 
 const fullscreenCloseTextStyle = {
   color: "rgba(110, 103, 131, 0.72)",
