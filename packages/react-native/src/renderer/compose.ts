@@ -271,6 +271,24 @@ ${js}
       }
       node = node.parentNode;
     }
+    // Conservative fallback for hosted documents that forgot the explicit
+    // data-tranzmit-action marker: treat clicks on a conventional primary CTA
+    // (button.cta / a.cta / [role=button].cta / .tz-cta) as a CTA event. Only
+    // matches interactive elements so unrelated .cta wrappers don't fire.
+    try {
+      var fallback = event.target && event.target.closest
+        ? event.target.closest('button.cta, a.cta, [role="button"].cta, .tz-cta')
+        : null;
+      if (fallback) {
+        event.preventDefault();
+        post({
+          type: 'cta',
+          productId: fallback.getAttribute('data-product-id') || undefined,
+          name: fallback.getAttribute('data-action-name') || undefined,
+          url: fallback.getAttribute('href') || undefined
+        });
+      }
+    } catch (_) {}
   }, true);
   window.addEventListener('load', function(){ post({ type: 'ready' }); });
 })();

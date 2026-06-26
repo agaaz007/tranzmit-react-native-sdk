@@ -39,8 +39,14 @@ export default function WebView({
   const buttons = Array.from(body.matchAll(/<button([^>]*)>(.*?)<\/button>/gims))
     .map((match) => {
       const attrs = match[1];
+      const explicitAction = attr(attrs, "data-tranzmit-action");
+      const classes = attr(attrs, "class") || "";
+      // Mirror compose.ts: explicit data-tranzmit-action wins; otherwise a
+      // conventional .cta / .tz-cta class on a button falls back to a CTA.
+      const isCtaClass = /(^|\s)(cta|tz-cta)(\s|$)/.test(classes);
+      const action = explicitAction || (isCtaClass ? "cta" : undefined);
       return {
-        action: attr(attrs, "data-tranzmit-action"),
+        action,
         productId: attr(attrs, "data-product-id"),
         url: attr(attrs, "href") || attr(attrs, "data-url"),
         label: stripTags(match[2]),

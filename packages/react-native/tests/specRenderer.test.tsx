@@ -27,6 +27,54 @@ describe("SpecRenderer", () => {
     expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
   });
 
+  it("treats clicks on a conventional button.cta as a CTA when data-tranzmit-action is absent", () => {
+    // Mirrors the hosted HiAstro themed paywall convention (<button class="cta">…</button>
+    // with no explicit bridge marker). Without the fallback, hosted docs ship today
+    // and silently drop conversions.
+    const onCTA = vi.fn();
+    const spec = {
+      ...baseSpec,
+      document: {
+        html: `
+          <main class="paywall">
+            <button class="cta" type="button">Unlock Love Clarity</button>
+          </main>
+        `,
+      },
+    };
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Unlock Love Clarity"));
+
+    // No data-product-id → SpecRenderer falls back to spec.products[0] (defaultProduct).
+    expect(onCTA).toHaveBeenCalledTimes(1);
+    expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
+  });
+
+  it("explicit data-tranzmit-action takes precedence over the .cta class fallback (no double-fire)", () => {
+    const onCTA = vi.fn();
+    const spec = {
+      ...baseSpec,
+      document: {
+        html: `
+          <main class="paywall">
+            <button class="cta" data-tranzmit-action="cta" data-product-id="pro_yearly" type="button">Go Yearly</button>
+          </main>
+        `,
+      },
+    };
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Go Yearly"));
+
+    expect(onCTA).toHaveBeenCalledTimes(1);
+    expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_yearly" }));
+  });
+
   it("maps WebView dismiss bridge messages to dismiss", () => {
     const onDismiss = vi.fn();
     const { getByText } = render(
