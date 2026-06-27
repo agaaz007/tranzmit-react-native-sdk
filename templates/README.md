@@ -4,6 +4,21 @@ A **fixed structure** for authoring paywalls and a **preview harness** that
 renders your HTML exactly the way the app's WebView does — so you stop hitting
 "looks right in the browser, breaks in the app."
 
+> ## ▶ Designing a new paywall? Read [`AUTHORING.md`](./AUTHORING.md) first.
+>
+> **[`AUTHORING.md`](./AUTHORING.md) is the canonical, end-to-end authoring
+> guide** (the design data-repo for agents). It documents the current
+> **SKELETON** / "v-final" structure that every responsive paywall now uses —
+> `tz-template → tz-shell → tz-scroll + tz-footer`, defined in
+> [`preview/samples/_skeleton.mjs`](./preview/samples/_skeleton.mjs) — plus the
+> CTA bridge, asset/integrity rules, the device-acceptance checklist, and the
+> shipping path. Start a new design by cloning the closest reference in
+> [`preview/samples/README.md`](./preview/samples/README.md).
+>
+> The three-band `tz-template` example shown lower in *this* file is the earlier
+> idiom and is kept for the legacy `paywall.html` reference; for **new** work,
+> follow the SKELETON in `AUTHORING.md`.
+
 ## Why paywalls render differently in the app
 
 In a desktop browser you see your raw HTML. In the app, the SDK *wraps* your
