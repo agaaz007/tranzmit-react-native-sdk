@@ -51,9 +51,12 @@ export type {
 
 export {
   DEFAULT_API_BASE_URL,
+  DEFAULT_FALLBACK_API_BASE_URLS,
+  LEGACY_API_BASE_URL,
   createTranzmitClient,
   makeError,
   resolveApiBaseUrl,
+  resolveApiBaseUrls,
   validatePublicKey,
   type InitConfig,
   type SharedClient,

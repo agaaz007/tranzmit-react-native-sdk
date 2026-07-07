@@ -177,7 +177,7 @@ describe("TranzmitProvider", () => {
 
     await waitFor(() => expect(getByText("ready")).toBeTruthy());
     expect(fetch).toHaveBeenCalledWith(
-      "https://api-production-2146.up.railway.app/v1/config",
+      "https://api.tranzmitai.com/v1/config",
       expect.objectContaining({ method: "POST" })
     );
   });
@@ -440,6 +440,7 @@ describe("TranzmitProvider", () => {
     expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/v1/paywall-documents/"),
+      expect.anything(),
     );
   });
 

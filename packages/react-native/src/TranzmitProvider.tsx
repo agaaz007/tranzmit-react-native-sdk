@@ -26,6 +26,7 @@ export function TranzmitProvider({
   userTraits,
   privateTraits,
   apiBaseUrl,
+  fallbackApiBaseUrls,
   locale,
   onError,
   debug,
@@ -136,6 +137,7 @@ export function TranzmitProvider({
         userTraits: { ...userTraits, ...dynamicTraitsRef.current },
         privateTraits,
         apiBaseUrl,
+        fallbackApiBaseUrls,
         onError: onError as any,
         debug,
       })
@@ -157,7 +159,7 @@ export function TranzmitProvider({
     return () => {
       cancelled = true;
     };
-  }, [apiBaseUrl, clearPreloads, debug, identifiers, onError, privateTraits, publicKey, userId, userTraits]);
+  }, [apiBaseUrl, clearPreloads, debug, fallbackApiBaseUrls, identifiers, onError, privateTraits, publicKey, userId, userTraits]);
 
   const preloadPlacement = useCallback((trigger: string, options: PreloadPlacementOptions = {}): Promise<PreloadResult> => {
     const client = clientRef.current;

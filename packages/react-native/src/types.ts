@@ -18,6 +18,12 @@ export interface TranzmitProviderProps {
   privateTraits?: Record<string, unknown>;
   apiBaseUrl?: string;
   /**
+   * Extra hosts tried in order when `apiBaseUrl` is unreachable. When
+   * `apiBaseUrl` is set and this is omitted, no fallback occurs — an explicit
+   * host (e.g. staging) never silently falls back to production.
+   */
+  fallbackApiBaseUrls?: string[];
+  /**
    * Active locale (for example `es` or `es-MX`) used to localize paywall text
    * tokens from `spec.localization`. When omitted, the spec's default locale is
    * used.

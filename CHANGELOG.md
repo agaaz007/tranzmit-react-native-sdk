@@ -2,6 +2,18 @@
 
 All notable changes to the Tranzmit React Native SDK packages (`@tranzmit/react-native`, `@tranzmit/shared`) are documented here. Dates are UTC and correspond to the npm publish time.
 
+## [react-native 0.3.0, shared 0.3.0] - 2026-07-07
+
+### Changed
+
+- **Default API host is now `https://api.tranzmitai.com`.** The previous Railway-provided host (`api-production-2146.up.railway.app`) is blocked at the DNS level by some mobile carriers (notably Indian ISPs such as Jio), which made config fetches fail on cellular data with "Failed host lookup" while WiFi worked. The Railway host remains active server-side and ships as the built-in fallback.
+
+### Added
+
+- **Automatic host failover.** `/v1/config`, hosted paywall document fetches, and `/v1/events` now retry across a host list: network-level failures (DNS, timeout) advance to the next host immediately, 5xx gets one same-host retry (350ms), 4xx never falls back. Hosted document URLs pinned to a blocked origin are rebased onto live hosts. The winning host is sticky per client; switches emit an `sdk_host_fallback` analytics event and a recoverable `api_host_fallback` error via `onError`.
+- `fallbackApiBaseUrls` prop on `TranzmitProvider` (and `InitConfig`). An explicit `apiBaseUrl` without `fallbackApiBaseUrls` disables failover so staging setups never silently hit production.
+- Timeouts on document and event requests (previously unbounded; config already had one).
+
 ## [react-native 0.2.3] - 2026-06-24
 
 ### Changed
