@@ -63,6 +63,6 @@
     }
   },
   "dependencies": {
-    "@tranzmit/shared": "0.2.0"
+    "@tranzmit/shared": "0.3.0"
   }
 }
