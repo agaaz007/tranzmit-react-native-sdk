@@ -4,10 +4,21 @@ import type { TranzmitIdentity } from "./identity.js";
 import { hashString, resolveIdentity, stableJson } from "./identity.js";
 import { PaywallIntegrityError, assertDocumentIntegrity } from "./integrity.js";
 
-export const DEFAULT_API_BASE_URL = "https://api-production-2146.up.railway.app";
+export const DEFAULT_API_BASE_URL = "https://api.tranzmitai.com";
+
+/**
+ * Railway-provided domain. Some mobile carriers (notably Indian ISPs) block
+ * DNS for the shared `*.up.railway.app` zone, which is why it is no longer
+ * the primary host — but it stays reachable everywhere else, so it serves as
+ * the built-in fallback.
+ */
+export const LEGACY_API_BASE_URL = "https://api-production-2146.up.railway.app";
+
+export const DEFAULT_FALLBACK_API_BASE_URLS = [LEGACY_API_BASE_URL];
 
 const CONFIG_KEY_PREFIX = "tranzmit:config:";
 const FETCH_TIMEOUT_MS = 8000;
+const SERVER_RETRY_DELAY_MS = 350;
 
 export interface InitConfig {
   publicKey: string;
@@ -16,6 +27,12 @@ export interface InitConfig {
   userTraits?: Record<string, unknown>;
   privateTraits?: Record<string, unknown>;
   apiBaseUrl?: string;
+  /**
+   * Extra hosts tried in order when `apiBaseUrl` is unreachable. When
+   * `apiBaseUrl` is set and this is undefined, no fallback occurs — an
+   * explicit host (e.g. staging) must never silently fall back to production.
+   */
+  fallbackApiBaseUrls?: string[];
   onError?: (error: TranzmitError) => void;
   debug?: boolean;
 }
@@ -63,6 +80,149 @@ export function createTranzmitClient(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribeBackground: (() => void) | null = null;
   let unsubscribeForeground: (() => void) | null = null;
+  let activeApiBaseUrl: string | null = null;
+
+  /** Hosts to try, with the last host that succeeded moved to the front. */
+  function hostCandidates(config: InitConfig): string[] {
+    const hosts = resolveApiBaseUrls(config.apiBaseUrl, config.fallbackApiBaseUrls);
+    if (!activeApiBaseUrl || activeApiBaseUrl === hosts[0] || !hosts.includes(activeApiBaseUrl)) {
+      return hosts;
+    }
+    return [activeApiBaseUrl, ...hosts.filter((host) => host !== activeApiBaseUrl)];
+  }
+
+  function noteHostSuccess(config: InitConfig, endpoint: string) {
+    return (host: string, failures: { host: string; error: string }[]): void => {
+      const switched = activeApiBaseUrl !== host;
+      activeApiBaseUrl = host;
+      const primary = resolveApiBaseUrls(config.apiBaseUrl, config.fallbackApiBaseUrls)[0];
+      if (!switched || host === primary) return;
+
+      track("sdk_host_fallback", {
+        endpoint,
+        host,
+        ...(failures.length
+          ? { failed_hosts: failures.map((f) => `${f.host}: ${f.error}`).join("; ") }
+          : {}),
+      });
+      config.onError?.(
+        makeError(
+          "api_host_fallback",
+          `Primary API host unreachable for ${endpoint}; using ${host}`,
+          true
+        )
+      );
+    };
+  }
+
+  async function fetchConfig(config: InitConfig, identity: TranzmitIdentity): Promise<ConfigResponse> {
+    if (typeof fetch !== "function") {
+      throw new Error("Config fetch unavailable: fetch is not defined");
+    }
+
+    const response = await sendAcrossHosts(
+      hostCandidates(config),
+      "/v1/config",
+      (baseUrl, signal) =>
+        fetch(`${baseUrl}/v1/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal,
+          body: JSON.stringify({
+            publicKey: config.publicKey,
+            identity,
+            traits: config.userTraits || {},
+            privateTraits: config.privateTraits || {},
+          }),
+        }),
+      noteHostSuccess(config, "/v1/config")
+    );
+
+    if (!response.ok) {
+      throw new Error(`Config fetch failed: HTTP ${response.status}`);
+    }
+
+    return response.json() as Promise<ConfigResponse>;
+  }
+
+  /**
+   * Fetches a hosted document, retrying the same path against every
+   * configured host when the document's own origin is unreachable. Covers
+   * cached configs whose absolute URLs are pinned to a blocked host.
+   */
+  async function fetchDocumentAcrossHosts(config: InitConfig, url: string): Promise<Response> {
+    const candidates: string[] = [url];
+    for (const base of hostCandidates(config)) {
+      const rebased = rebaseUrl(url, base);
+      if (rebased && !candidates.some((c) => originOf(c) === originOf(rebased))) {
+        candidates.push(rebased);
+      }
+    }
+    return sendAcrossHosts(
+      candidates.map((c) => originOf(c) ?? c),
+      url,
+      (_origin, signal) => {
+        const candidate = candidates.find((c) => originOf(c) === _origin) ?? url;
+        return fetch(candidate, { signal });
+      },
+      noteHostSuccess(config, originOf(url) ? url.slice(originOf(url)!.length) : url)
+    );
+  }
+
+  async function hydratePaywallDocuments(config: InitConfig, response: ConfigResponse): Promise<void> {
+    const placements = Object.values(response.placements || {});
+    await Promise.all(placements.map(async (placement) => {
+      if (!placement) return;
+      const spec = placement.spec;
+      const document = spec.document;
+      if (!document) {
+        throw new Error(`Paywall ${placement.trigger} is missing a WebView document`);
+      }
+      if (!document.url) {
+        if (document.html && document.integrity) assertDocumentIntegrity(document, document.html);
+        return;
+      }
+      if (document.html) {
+        assertDocumentIntegrity(document, document.html);
+        return;
+      }
+
+      const docResponse = await fetchDocumentAcrossHosts(config, document.url);
+      if (!docResponse.ok) {
+        throw new Error(`Paywall document fetch failed: HTTP ${docResponse.status}`);
+      }
+
+      const contentType = docResponse.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const payload = JSON.parse(await docResponse.text()) as {
+          html?: string;
+          css?: string;
+          js?: string;
+          baseUrl?: string;
+          integrity?: string;
+        };
+        if (!payload.html) throw new Error("Paywall document payload is missing html");
+        const hydrated = {
+          ...document,
+          html: payload.html,
+          css: payload.css ?? document.css,
+          js: payload.js ?? document.js,
+          baseUrl: payload.baseUrl ?? document.baseUrl,
+          integrity: document.integrity,
+        };
+        assertDocumentIntegrity(hydrated, payload.html);
+        spec.document = hydrated;
+        return;
+      }
+
+      const html = await docResponse.text();
+      assertDocumentIntegrity(document, html);
+      spec.document = {
+        ...document,
+        html,
+      };
+    }));
+  }
 
   async function init(config: InitConfig): Promise<void> {
     validatePublicKey(config.publicKey);
@@ -113,7 +273,7 @@ export function createTranzmitClient(
 
     try {
       const fresh = await fetchConfig(config, identity);
-      await hydratePaywallDocuments(fresh);
+      await hydratePaywallDocuments(config, fresh);
       configResponse = fresh;
       initialized = true;
       await setCachedConfig(adapter, config, identity, fresh);
@@ -130,7 +290,7 @@ export function createTranzmitClient(
   async function refreshConfig(config: InitConfig, identity: TranzmitIdentity): Promise<void> {
     try {
       const fresh = await fetchConfig(config, identity);
-      await hydratePaywallDocuments(fresh);
+      await hydratePaywallDocuments(config, fresh);
       configResponse = fresh;
       await setCachedConfig(adapter, config, identity, fresh);
     } catch (err: any) {
@@ -144,7 +304,7 @@ export function createTranzmitClient(
     if (!currentConfig || !currentIdentity) return;
     try {
       const fresh = await fetchConfig(currentConfig, currentIdentity);
-      await hydratePaywallDocuments(fresh);
+      await hydratePaywallDocuments(currentConfig, fresh);
       configResponse = fresh;
       initialized = true;
       await setCachedConfig(adapter, currentConfig, currentIdentity, fresh);
@@ -233,20 +393,28 @@ export function createTranzmitClient(
       return;
     }
 
+    const config = currentConfig;
     try {
-      const response = await fetch(`${resolveApiBaseUrl(currentConfig.apiBaseUrl)}/v1/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicKey: currentConfig.publicKey,
-          userId: currentConfig.userId,
-          identity: currentIdentity || undefined,
-          traits: currentConfig.userTraits || {},
-          privateTraits: currentConfig.privateTraits || {},
-          sessionId,
-          events: batch.map(({ attempts: _attempts, ...event }) => event),
-        }),
-      });
+      const response = await sendAcrossHosts(
+        hostCandidates(config),
+        "/v1/events",
+        (baseUrl, signal) =>
+          fetch(`${baseUrl}/v1/events`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal,
+            body: JSON.stringify({
+              publicKey: config.publicKey,
+              userId: config.userId,
+              identity: currentIdentity || undefined,
+              traits: config.userTraits || {},
+              privateTraits: config.privateTraits || {},
+              sessionId,
+              events: batch.map(({ attempts: _attempts, ...event }) => event),
+            }),
+          }),
+        noteHostSuccess(config, "/v1/events")
+      );
 
       if (!response.ok) {
         throw new Error(`Event flush failed: HTTP ${response.status}`);
@@ -267,6 +435,7 @@ export function createTranzmitClient(
     currentInitKey = null;
     sessionId = generateSessionId();
     queue = [];
+    activeApiBaseUrl = null;
   }
 
   function addMetadata(properties?: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -330,6 +499,88 @@ export function resolveApiBaseUrl(explicit?: string): string {
   return DEFAULT_API_BASE_URL;
 }
 
+/** Hosts to try in order: the primary first, then fallbacks, deduped. */
+export function resolveApiBaseUrls(explicit?: string, fallbacks?: string[]): string[] {
+  const extras = fallbacks ?? (explicit?.trim() ? [] : DEFAULT_FALLBACK_API_BASE_URLS);
+  const hosts = new Set<string>([resolveApiBaseUrl(explicit)]);
+  for (const url of extras) {
+    const trimmed = url?.trim();
+    if (trimmed) hosts.add(trimmed.replace(/\/$/, ""));
+  }
+  return [...hosts];
+}
+
+interface HostFailure {
+  host: string;
+  error: string;
+}
+
+/**
+ * Sends a request against each candidate base URL until one answers.
+ *
+ * Network-level failures (DNS lookup, timeout, connection reset) advance to
+ * the next host immediately — a blocked hostname will not recover within a
+ * request. 5xx gets one same-host retry before advancing. Any response below
+ * 500 is returned to the caller as-is, so 4xx handling stays deterministic
+ * and never falls back.
+ */
+async function sendAcrossHosts(
+  hosts: string[],
+  endpoint: string,
+  send: (baseUrl: string, signal?: AbortSignal) => Promise<Response>,
+  onHostSuccess?: (host: string, failures: HostFailure[]) => void
+): Promise<Response> {
+  const failures: HostFailure[] = [];
+
+  for (const base of hosts) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timeout = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
+      let response: Response;
+      try {
+        response = await send(base, controller?.signal);
+      } catch (err: any) {
+        failures.push({
+          host: base,
+          error: err?.name === "AbortError" ? "timed out" : String(err?.message || err),
+        });
+        break;
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+      if (response.status >= 500) {
+        if (attempt === 0) {
+          await delay(SERVER_RETRY_DELAY_MS);
+          continue;
+        }
+        failures.push({ host: base, error: `HTTP ${response.status}` });
+        break;
+      }
+      onHostSuccess?.(base, failures);
+      return response;
+    }
+  }
+
+  throw new Error(
+    `All hosts failed for ${endpoint}: ${failures.map((f) => `${f.host}: ${f.error}`).join("; ")}`
+  );
+}
+
+function originOf(url: string): string | null {
+  return /^https?:\/\/[^/]+/.exec(url)?.[0] ?? null;
+}
+
+/** Swaps the origin of an absolute URL onto another base, keeping path+query. */
+function rebaseUrl(url: string, base: string): string | null {
+  const match = /^https?:\/\/[^/]+(\/.*)?$/.exec(url);
+  if (!match) return null;
+  return base + (match[1] || "/");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function makeError(code: string, message: string, recoverable: boolean): TranzmitError {
   const err = new Error(message) as TranzmitError;
   err.name = "TranzmitError";
@@ -376,100 +627,6 @@ async function setCachedConfig(
   } catch {
     // Best-effort cache.
   }
-}
-
-async function fetchConfig(
-  config: InitConfig,
-  identity: TranzmitIdentity
-): Promise<ConfigResponse> {
-  if (typeof fetch !== "function") {
-    throw new Error("Config fetch unavailable: fetch is not defined");
-  }
-
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timeout = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
-
-  try {
-    const response = await fetch(`${resolveApiBaseUrl(config.apiBaseUrl)}/v1/config`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller?.signal,
-      body: JSON.stringify({
-        publicKey: config.publicKey,
-        identity,
-        traits: config.userTraits || {},
-        privateTraits: config.privateTraits || {},
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Config fetch failed: HTTP ${response.status}`);
-    }
-
-    return response.json() as Promise<ConfigResponse>;
-  } catch (err: any) {
-    if (err?.name === "AbortError") {
-      throw new Error("Config fetch timed out");
-    }
-    throw err;
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
-async function hydratePaywallDocuments(config: ConfigResponse): Promise<void> {
-  const placements = Object.values(config.placements || {});
-  await Promise.all(placements.map(async (placement) => {
-    if (!placement) return;
-    const spec = placement.spec;
-    const document = spec.document;
-    if (!document) {
-      throw new Error(`Paywall ${placement.trigger} is missing a WebView document`);
-    }
-    if (!document.url) {
-      if (document.html && document.integrity) assertDocumentIntegrity(document, document.html);
-      return;
-    }
-    if (document.html) {
-      assertDocumentIntegrity(document, document.html);
-      return;
-    }
-
-    const response = await fetch(document.url);
-    if (!response.ok) {
-      throw new Error(`Paywall document fetch failed: HTTP ${response.status}`);
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("application/json")) {
-      const payload = JSON.parse(await response.text()) as {
-        html?: string;
-        css?: string;
-        js?: string;
-        baseUrl?: string;
-        integrity?: string;
-      };
-      if (!payload.html) throw new Error("Paywall document payload is missing html");
-      const hydrated = {
-        ...document,
-        html: payload.html,
-        css: payload.css ?? document.css,
-        js: payload.js ?? document.js,
-        baseUrl: payload.baseUrl ?? document.baseUrl,
-        integrity: document.integrity,
-      };
-      assertDocumentIntegrity(hydrated, payload.html);
-      spec.document = hydrated;
-      return;
-    }
-
-    const html = await response.text();
-    assertDocumentIntegrity(document, html);
-    spec.document = {
-      ...document,
-      html,
-    };
-  }));
 }
 
 function validateCachedPaywallDocuments(config: ConfigResponse): void {

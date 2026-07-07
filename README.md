@@ -118,12 +118,14 @@ export default function App() {
 ```tsx
 <TranzmitProvider
   publicKey="pk_live_REPLACE_WITH_CUSTOMER_PUBLIC_KEY"
-  apiBaseUrl="https://api-production-2146.up.railway.app"
+  apiBaseUrl="https://api.tranzmitai.com"
   userId={currentUser?.id}
 >
   <RootNavigator />
 </TranzmitProvider>
 ```
+
+By default the SDK fails over automatically: if the primary host is unreachable (for example, a mobile carrier blocking its DNS), config, hosted document, and event requests retry against built-in fallback hosts. Setting `apiBaseUrl` explicitly disables the built-in fallbacks so a staging URL never silently falls back to production; pass `fallbackApiBaseUrls` to combine a custom primary with failover.
 
 ### Step 6: Pass User Identity Correctly
 
@@ -354,7 +356,7 @@ If Claude, Codex, Cursor, or another coding agent implements this SDK, the task 
   identifiers={{ accountID: account.id }}
   userTraits={{ plan: "free" }}
   privateTraits={{ internalSegment: "beta" }}
-  apiBaseUrl="https://api-production-2146.up.railway.app"
+  apiBaseUrl="https://api.tranzmitai.com"
   onError={(error) => console.warn(error)}
   debug={false}
 >
