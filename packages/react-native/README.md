@@ -1,5 +1,7 @@
 # @tranzmit/react-native
 
+HiAstro's exact exposure, semantic WebView telemetry, Statsig correlation, checkout propagation, privacy, and ingress contracts are documented in [`../../docs/hiastro-exact-telemetry.md`](../../docs/hiastro-exact-telemetry.md).
+
 React Native SDK for [Tranzmit](https://github.com/agaaz007/tranzmit-react-native-sdk) server-driven WebView paywalls. Fetch remote placement config, render hosted paywall documents, run server-side experiments, and send impression / CTA / conversion analytics — without shipping a new app build for every paywall change.
 
 > Tranzmit owns paywall presentation, experimentation, and analytics. Your app owns billing and entitlements. Tranzmit does **not** process purchases.

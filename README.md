@@ -2,6 +2,8 @@
 
 Client React Native SDK for Tranzmit server-driven WebView paywalls. The SDK fetches remote placement config, renders hosted paywall documents, assigns users through server-side experiments, and sends impression / CTA / dismissal / conversion events back to Tranzmit.
 
+See [HiAstro exact paywall telemetry](docs/hiastro-exact-telemetry.md) for the V2 exposure, semantic bridge, Statsig, checkout, privacy, and ingress contract.
+
 The Git repository is named `tranzmit-react-native-sdk`. The npm package customers install and import is the published package `@tranzmit/react-native`.
 
 ## What Customers Need

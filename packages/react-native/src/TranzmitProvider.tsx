@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createTranzmitClient, type SharedClient, type TranzmitIdentity } from "@tranzmit/shared";
+import {
+  createTranzmitClient,
+  deterministicReplaySample,
+  exposureContextFromPlacement,
+  generateUuid,
+  type SemanticBridgeEvent,
+  type SharedClient,
+  type TranzmitIdentity,
+} from "@tranzmit/shared";
 import { reactNativeAdapter, reactNativeMetadata } from "./adapter.js";
 import { PaywallHost } from "./PaywallHost.js";
 import { TranzmitContext } from "./TranzmitContext.js";
@@ -29,12 +37,15 @@ export function TranzmitProvider({
   fallbackApiBaseUrls,
   locale,
   onError,
+  onExperimentExposure,
+  replay,
   debug,
   children,
 }: TranzmitProviderProps) {
   const clientRef = useRef<SharedClient | null>(null);
   const activeRef = useRef<Map<string, ActivePaywall>>(new Map());
   const preloadedRef = useRef<Map<string, PreloadedPaywall>>(new Map());
+  const renderedExposureRef = useRef<Set<string>>(new Set());
   const preloadWaitersRef = useRef<Map<string, Array<(result: PreloadResult) => void>>>(new Map());
   // Traits set at runtime via setTraits (for example the category resolved
   // mid-session). Kept in a ref and merged into init so a later prop-driven
@@ -112,8 +123,7 @@ export function TranzmitProvider({
     if (preloadedChanged) syncPreloadedState();
 
     if (trackDismissal) {
-      clientRef.current?.track("dismissal", {
-        ...attribution(active.trigger, active.placement),
+      clientRef.current?.trackExposureEvent("dismissal", active.exposure, {
         time_on_screen_ms: Date.now() - active.shownAt,
       });
       active.options.onDismiss?.();
@@ -126,6 +136,7 @@ export function TranzmitProvider({
     setIsReady(false);
     setReadyError(undefined);
     activeRef.current.clear();
+    renderedExposureRef.current.clear();
     setActivePaywalls([]);
     clearPreloads("not_ready");
 
@@ -252,6 +263,8 @@ export function TranzmitProvider({
       return {
         shown: true,
         variantId: existing.placement.variantId,
+        exposureId: existing.exposure.exposureId,
+        sessionId: existing.exposure.sessionId,
         dismiss: () => dismissPaywall(existing.id, true),
       };
     }
@@ -266,6 +279,8 @@ export function TranzmitProvider({
       presentation,
       options,
       shownAt: Date.now(),
+      exposure: exposureContextFromPlacement(placement, client.getSessionId()),
+      bridgeNonce: generateUuid(),
     };
 
     activeRef.current.set(trigger, active);
@@ -275,12 +290,11 @@ export function TranzmitProvider({
     } else {
       setActivePaywalls((items) => [...items, active]);
     }
-    client.track("impression", attribution(trigger, placement));
-    options.onImpression?.();
-
     return {
       shown: true,
       variantId: placement.variantId,
+      exposureId: active.exposure.exposureId,
+      sessionId: active.exposure.sessionId,
       dismiss: () => dismissPaywall(active.id, true),
     };
   }, [dismissPaywall, readyError, syncPreloadedState]);
@@ -301,6 +315,50 @@ export function TranzmitProvider({
       variantId: active.placement.variantId,
     });
   }, [dismissPaywall]);
+
+  const handleRendered = useCallback((active: ActivePaywall) => {
+    if (renderedExposureRef.current.has(active.exposure.exposureId)) return;
+    renderedExposureRef.current.add(active.exposure.exposureId);
+    const consent = replay?.consent === true;
+    const sampled = consent && deterministicReplaySample(
+      active.exposure.exposureId,
+      replay?.samplePercent ?? 10
+    );
+    const replayMetadata = {
+      replay_consented: consent,
+      replay_sampled: sampled,
+      replay_retention_days: replay?.retentionDays ?? 30,
+    };
+    clientRef.current?.trackExposureEvent("paywall_rendered", active.exposure, replayMetadata);
+    clientRef.current?.trackExposureEvent("impression", active.exposure, replayMetadata);
+    void clientRef.current?.flush();
+    active.options.onImpression?.();
+    if (active.exposure.experimentId && active.exposure.decisionId) {
+      onExperimentExposure?.({
+        exposureId: active.exposure.exposureId,
+        experimentId: active.exposure.experimentId,
+        experimentSnapshotId: active.exposure.experimentSnapshotId,
+        variantId: active.exposure.variantId,
+        variantKey: active.exposure.variantKey,
+        decisionId: active.exposure.decisionId,
+        stableID: userContext?.stableID,
+        userID: userContext?.userId,
+      });
+    }
+  }, [onExperimentExposure, replay, userContext]);
+
+  const handleSemanticTelemetry = useCallback((
+    active: ActivePaywall,
+    semantic: SemanticBridgeEvent
+  ) => {
+    if (semantic.event === "render_confirmed"
+      || semantic.event === "cta_click"
+      || semantic.event === "dismissal") return;
+    clientRef.current?.trackExposureEvent(semantic.event, active.exposure, {
+      ...semantic.properties,
+      sequence_offset_ms: Math.max(0, Date.now() - active.shownAt),
+    });
+  }, []);
 
   const handlePreloadReady = useCallback((preload: PreloadedPaywall) => {
     const current = preloadedRef.current.get(preload.id);
@@ -340,6 +398,10 @@ export function TranzmitProvider({
 
   const reportConversion = useCallback((data: ReportConversionData) => {
     clientRef.current?.reportConversion(data);
+  }, []);
+
+  const reportOutcome = useCallback((data: Parameters<SharedClient["reportExposureOutcome"]>[0]) => {
+    clientRef.current?.reportExposureOutcome(data);
   }, []);
 
   const refreshConfig = useCallback(async () => {
@@ -383,11 +445,12 @@ export function TranzmitProvider({
     preloadPlacement,
     track,
     reportConversion,
+    reportOutcome,
     refreshConfig,
     setTraits,
     flush: () => clientRef.current?.flush() || Promise.resolve(),
     getPlacement: (trigger) => clientRef.current?.getPlacement(trigger) || null,
-  }), [configVersion, gate, isReady, locale, preloadPlacement, refreshConfig, reportConversion, setTraits, track, userContext]);
+  }), [configVersion, gate, isReady, locale, preloadPlacement, refreshConfig, reportConversion, reportOutcome, setTraits, track, userContext]);
 
   return (
     <TranzmitContext.Provider value={value}>
@@ -398,17 +461,19 @@ export function TranzmitProvider({
         user={userContext}
         locale={locale}
         onCTA={(active, product) => {
-          clientRef.current?.track("cta_click", {
-            ...attribution(active.trigger, active.placement),
+          clientRef.current?.trackExposureEvent("cta_click", active.exposure, {
             productId: product.id,
+            sequence_offset_ms: Math.max(0, Date.now() - active.shownAt),
           });
           dismissPaywall(active.id, false);
-          active.options.onCTA?.(product);
+          active.options.onCTA?.(product, active.exposure);
         }}
         onDismiss={(active) => dismissPaywall(active.id, true)}
         onError={handlePaywallError}
         onPreloadReady={handlePreloadReady}
         onPreloadError={handlePreloadError}
+        onRendered={handleRendered}
+        onTelemetry={handleSemanticTelemetry}
       />
     </TranzmitContext.Provider>
   );

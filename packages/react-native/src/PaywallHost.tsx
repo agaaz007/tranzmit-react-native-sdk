@@ -1,4 +1,4 @@
-import type { ProductSpec } from "@tranzmit/shared";
+import type { ProductSpec, SemanticBridgeEvent } from "@tranzmit/shared";
 import { Pressable, Text, View } from "react-native";
 import { SpecRenderer } from "./renderer/SpecRenderer.js";
 import { ModalPresenter } from "./presentation/ModalPresenter.js";
@@ -24,6 +24,8 @@ export interface PaywallHostProps {
   onError: (active: ActivePaywall, error: Error) => void;
   onPreloadReady?: (preload: PreloadedPaywall) => void;
   onPreloadError?: (preload: PreloadedPaywall, error: Error) => void;
+  onRendered: (active: ActivePaywall) => void;
+  onTelemetry: (active: ActivePaywall, event: SemanticBridgeEvent) => void;
 }
 
 export function PaywallHost({
@@ -36,6 +38,8 @@ export function PaywallHost({
   onError,
   onPreloadReady,
   onPreloadError,
+  onRendered,
+  onTelemetry,
 }: PaywallHostProps) {
   const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0, bottom: 0, left: 0, right: 0 };
   return (
@@ -70,6 +74,7 @@ export function PaywallHost({
                 </Pressable>
               ) : null}
               <SpecRenderer
+                key={active?.exposure.exposureId ?? "preload"}
                 spec={preload.placement.spec}
                 user={user}
                 locale={locale}
@@ -86,7 +91,16 @@ export function PaywallHost({
                     onPreloadError?.(preload, error);
                   }
                 }}
-                onReady={() => onPreloadReady?.(preload)}
+                telemetryContext={active
+                  ? { exposureId: active.exposure.exposureId, bridgeNonce: active.bridgeNonce }
+                  : undefined}
+                onTelemetry={(event) => {
+                  if (preload.active) onTelemetry(preload.active, event);
+                }}
+                onReady={() => {
+                  if (preload.active) onRendered(preload.active);
+                  else onPreloadReady?.(preload);
+                }}
                 presentation={preload.presentation}
               />
             </View>
@@ -102,12 +116,15 @@ export function PaywallHost({
             onCTA={(product) => onCTA(active, product)}
             onDismiss={() => onDismiss(active)}
             onError={(error) => onError(active, error)}
+            telemetryContext={{ exposureId: active.exposure.exposureId, bridgeNonce: active.bridgeNonce }}
+            onTelemetry={(event) => onTelemetry(active, event)}
+            onReady={() => onRendered(active)}
             presentation={active.presentation}
           />
         );
 
         if (active.presentation === "inline") {
-          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} locale={locale} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
+          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} locale={locale} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} telemetryContext={{ exposureId: active.exposure.exposureId, bridgeNonce: active.bridgeNonce }} onTelemetry={(event) => onTelemetry(active, event)} onReady={() => onRendered(active)} presentation="inline" />;
         }
 
         if (active.presentation === "modal") {

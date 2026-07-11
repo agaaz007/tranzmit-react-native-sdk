@@ -8,6 +8,20 @@ export interface PlacementConfig {
   variantId: string;
   variantKey?: string;
   variant_key?: string;
+  paywallId?: string;
+  paywall_id?: string;
+  creativeId?: string;
+  creative_id?: string;
+  decisionId?: string;
+  decision_id?: string;
+  snapshotId?: string;
+  snapshot_id?: string;
+  experimentId?: string;
+  experiment_id?: string;
+  experimentSnapshotId?: string;
+  experiment_snapshot_id?: string;
+  decisionToken?: string;
+  decision_token?: string;
   spec: PaywallSpec;
 }
 
