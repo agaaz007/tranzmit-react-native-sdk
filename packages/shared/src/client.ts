@@ -1,6 +1,7 @@
 import type { PlatformAdapter, PlatformMetadata } from "./adapter.js";
 import type { ConfigResponse, PlacementConfig } from "./config.js";
 import type { TranzmitIdentity } from "./identity.js";
+import type { WebViewDocumentSpec } from "./spec.js";
 import { hashString, resolveIdentity, stableJson } from "./identity.js";
 import { PaywallIntegrityError, assertDocumentIntegrity } from "./integrity.js";
 
@@ -17,7 +18,8 @@ export const LEGACY_API_BASE_URL = "https://api-production-2146.up.railway.app";
 export const DEFAULT_FALLBACK_API_BASE_URLS = [LEGACY_API_BASE_URL];
 
 const CONFIG_KEY_PREFIX = "tranzmit:config:";
-const FETCH_TIMEOUT_MS = 8000;
+const API_FETCH_TIMEOUT_MS = 8000;
+const DOCUMENT_FETCH_TIMEOUT_MS = 20_000;
 const SERVER_RETRY_DELAY_MS = 350;
 
 export interface InitConfig {
@@ -65,6 +67,20 @@ interface QueuedEvent {
   attempts: number;
 }
 
+interface HostedDocumentContent {
+  html: string;
+  css?: string;
+  js?: string;
+  baseUrl?: string;
+}
+
+interface FetchedDocumentResponse {
+  ok: boolean;
+  status: number;
+  headers: Headers;
+  body: string;
+}
+
 export function createTranzmitClient(
   adapter: PlatformAdapter,
   metadata: PlatformMetadata = {}
@@ -81,6 +97,8 @@ export function createTranzmitClient(
   let unsubscribeBackground: (() => void) | null = null;
   let unsubscribeForeground: (() => void) | null = null;
   let activeApiBaseUrl: string | null = null;
+  let configGeneration = 0;
+  const hostedDocumentLoads = new Map<string, Promise<HostedDocumentContent>>();
 
   /** Hosts to try, with the last host that succeeded moved to the front. */
   function hostCandidates(config: InitConfig): string[] {
@@ -150,51 +168,65 @@ export function createTranzmitClient(
    * configured host when the document's own origin is unreachable. Covers
    * cached configs whose absolute URLs are pinned to a blocked host.
    */
-  async function fetchDocumentAcrossHosts(config: InitConfig, url: string): Promise<Response> {
-    const candidates: string[] = [url];
-    for (const base of hostCandidates(config)) {
+  async function fetchDocumentAcrossHosts(
+    config: InitConfig,
+    url: string
+  ): Promise<FetchedDocumentResponse> {
+    const hosts = hostCandidates(config);
+    const originalOrigin = originOf(url);
+    const orderedHosts = originalOrigin && !hosts.some((host) => originOf(host) === originalOrigin)
+      ? [originalOrigin, ...hosts]
+      : hosts;
+    const candidates: string[] = [];
+    for (const base of orderedHosts) {
       const rebased = rebaseUrl(url, base);
       if (rebased && !candidates.some((c) => originOf(c) === originOf(rebased))) {
         candidates.push(rebased);
       }
     }
+    if (candidates.length === 0) candidates.push(url);
     return sendAcrossHosts(
       candidates.map((c) => originOf(c) ?? c),
       url,
-      (_origin, signal) => {
+      async (_origin, signal) => {
         const candidate = candidates.find((c) => originOf(c) === _origin) ?? url;
-        return fetch(candidate, { signal });
+        const response = await fetch(candidate, { signal });
+        // Await the body inside the timed operation. React Native's XHR-backed
+        // fetch already buffers it, while standards-based fetch may resolve at
+        // headers; this keeps the timeout correct in both implementations.
+        const body = await response.text();
+        return {
+          ok: response.ok,
+          status: response.status,
+          headers: response.headers,
+          body,
+        };
       },
-      noteHostSuccess(config, originOf(url) ? url.slice(originOf(url)!.length) : url)
+      noteHostSuccess(config, originOf(url) ? url.slice(originOf(url)!.length) : url),
+      { timeoutMs: DOCUMENT_FETCH_TIMEOUT_MS }
     );
   }
 
-  async function hydratePaywallDocuments(config: InitConfig, response: ConfigResponse): Promise<void> {
-    const placements = Object.values(response.placements || {});
-    await Promise.all(placements.map(async (placement) => {
-      if (!placement) return;
-      const spec = placement.spec;
-      const document = spec.document;
-      if (!document) {
-        throw new Error(`Paywall ${placement.trigger} is missing a WebView document`);
-      }
-      if (!document.url) {
-        if (document.html && document.integrity) assertDocumentIntegrity(document, document.html);
-        return;
-      }
-      if (document.html) {
-        assertDocumentIntegrity(document, document.html);
-        return;
-      }
+  function loadHostedDocument(
+    config: InitConfig,
+    key: string,
+    document: WebViewDocumentSpec
+  ): Promise<HostedDocumentContent> {
+    const existing = hostedDocumentLoads.get(key);
+    if (existing) return existing;
 
-      const docResponse = await fetchDocumentAcrossHosts(config, document.url);
+    const load = (async () => {
+      const docResponse = await fetchDocumentAcrossHosts(config, document.url!);
       if (!docResponse.ok) {
         throw new Error(`Paywall document fetch failed: HTTP ${docResponse.status}`);
       }
 
       const contentType = docResponse.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const payload = JSON.parse(await docResponse.text()) as {
+      let content: HostedDocumentContent;
+      if (!contentType.includes("application/json")) {
+        content = { html: docResponse.body };
+      } else {
+        const payload = JSON.parse(docResponse.body) as {
           html?: string;
           css?: string;
           js?: string;
@@ -202,26 +234,86 @@ export function createTranzmitClient(
           integrity?: string;
         };
         if (!payload.html) throw new Error("Paywall document payload is missing html");
-        const hydrated = {
-          ...document,
+        content = {
           html: payload.html,
-          css: payload.css ?? document.css,
-          js: payload.js ?? document.js,
-          baseUrl: payload.baseUrl ?? document.baseUrl,
-          integrity: document.integrity,
+          css: payload.css,
+          js: payload.js,
+          baseUrl: payload.baseUrl,
         };
-        assertDocumentIntegrity(hydrated, payload.html);
-        spec.document = hydrated;
-        return;
       }
 
-      const html = await docResponse.text();
-      assertDocumentIntegrity(document, html);
-      spec.document = {
-        ...document,
-        html,
-      };
-    }));
+      // Validate before retaining a successful content-addressed promise. A
+      // transiently corrupted response must be evicted and fetched again.
+      assertDocumentIntegrity({ ...document, ...content }, content.html);
+      return content;
+    })();
+
+    hostedDocumentLoads.set(key, load);
+    // Content-addressed payloads are immutable and can stay warm for this
+    // client. Custom URLs are only single-flighted while a request is active.
+    void load.then(
+      () => {
+        if (key.startsWith("url:") && hostedDocumentLoads.get(key) === load) {
+          hostedDocumentLoads.delete(key);
+        }
+      },
+      () => {
+        if (hostedDocumentLoads.get(key) === load) hostedDocumentLoads.delete(key);
+      }
+    );
+    return load;
+  }
+
+  async function hydratePaywallDocuments(config: InitConfig, response: ConfigResponse): Promise<void> {
+    const placements = Object.values(response.placements || {});
+    const hostedDocuments = new Map<
+      string,
+      Array<{ spec: PlacementConfig["spec"]; document: WebViewDocumentSpec }>
+    >();
+
+    for (const placement of placements) {
+      if (!placement) continue;
+      const spec = placement.spec;
+      const document = spec.document;
+      if (!document) {
+        throw new Error(`Paywall ${placement.trigger} is missing a WebView document`);
+      }
+      if (!document.url) {
+        if (document.html && document.integrity) assertDocumentIntegrity(document, document.html);
+        continue;
+      }
+      if (document.html) {
+        assertDocumentIntegrity(document, document.html);
+        continue;
+      }
+
+      const key = hostedDocumentHydrationKey(document);
+      const group = hostedDocuments.get(key) || [];
+      group.push({ spec, document });
+      hostedDocuments.set(key, group);
+    }
+
+    // Hosted documents can be hundreds of kilobytes. Download unique payloads
+    // serially so multiple placements do not divide a weak mobile connection's
+    // bandwidth and independently trip the per-document timeout.
+    for (const group of hostedDocuments.values()) {
+      const source = group[0]!.document;
+      const key = hostedDocumentHydrationKey(source);
+      const content = await loadHostedDocument(config, key, source);
+
+      for (const target of group) {
+        const hydrated = {
+          ...target.document,
+          html: content.html,
+          css: content.css ?? target.document.css,
+          js: content.js ?? target.document.js,
+          baseUrl: content.baseUrl ?? target.document.baseUrl,
+          integrity: target.document.integrity,
+        };
+        assertDocumentIntegrity(hydrated, content.html);
+        target.spec.document = hydrated;
+      }
+    }
   }
 
   async function init(config: InitConfig): Promise<void> {
@@ -254,15 +346,18 @@ export function createTranzmitClient(
       sessionId = generateSessionId();
     });
 
-    initPromise = initFromCacheThenNetwork(config, identity);
+    const generation = ++configGeneration;
+    initPromise = initFromCacheThenNetwork(config, identity, generation);
     return initPromise;
   }
 
   async function initFromCacheThenNetwork(
     config: InitConfig,
-    identity: TranzmitIdentity
+    identity: TranzmitIdentity,
+    generation: number
   ): Promise<void> {
     const cached = await getCachedConfig(adapter, config, identity);
+    if (generation !== configGeneration) return;
     if (cached) {
       configResponse = cached;
       initialized = true;
@@ -273,12 +368,15 @@ export function createTranzmitClient(
 
     try {
       const fresh = await fetchConfig(config, identity);
+      if (generation !== configGeneration) return;
       await hydratePaywallDocuments(config, fresh);
+      if (generation !== configGeneration) return;
       configResponse = fresh;
       initialized = true;
       await setCachedConfig(adapter, config, identity, fresh);
       track("page_view");
     } catch (err: any) {
+      if (generation !== configGeneration) return;
       const error = makeError(configErrorCode(err, "config_fetch_failed"), err?.message || "Config fetch failed", true);
       config.onError?.(error);
       initPromise = null;
@@ -288,12 +386,16 @@ export function createTranzmitClient(
   }
 
   async function refreshConfig(config: InitConfig, identity: TranzmitIdentity): Promise<void> {
+    const generation = ++configGeneration;
     try {
       const fresh = await fetchConfig(config, identity);
+      if (generation !== configGeneration) return;
       await hydratePaywallDocuments(config, fresh);
+      if (generation !== configGeneration) return;
       configResponse = fresh;
       await setCachedConfig(adapter, config, identity, fresh);
     } catch (err: any) {
+      if (generation !== configGeneration) return;
       config.onError?.(
         makeError(configErrorCode(err, "config_refresh_failed"), err?.message || "Config refresh failed", true)
       );
@@ -302,13 +404,17 @@ export function createTranzmitClient(
 
   async function refreshCurrentConfig(): Promise<void> {
     if (!currentConfig || !currentIdentity) return;
+    const generation = ++configGeneration;
     try {
       const fresh = await fetchConfig(currentConfig, currentIdentity);
+      if (generation !== configGeneration) return;
       await hydratePaywallDocuments(currentConfig, fresh);
+      if (generation !== configGeneration) return;
       configResponse = fresh;
       initialized = true;
       await setCachedConfig(adapter, currentConfig, currentIdentity, fresh);
     } catch (err: any) {
+      if (generation !== configGeneration) return;
       currentConfig.onError?.(
         makeError(configErrorCode(err, "config_refresh_failed"), err?.message || "Config refresh failed", true)
       );
@@ -436,6 +542,8 @@ export function createTranzmitClient(
     sessionId = generateSessionId();
     queue = [];
     activeApiBaseUrl = null;
+    configGeneration += 1;
+    hostedDocumentLoads.clear();
   }
 
   function addMetadata(properties?: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -515,6 +623,15 @@ interface HostFailure {
   error: string;
 }
 
+interface HostResponseLike {
+  status: number;
+  headers?: { get(name: string): string | null };
+}
+
+interface SendAcrossHostsOptions {
+  timeoutMs?: number;
+}
+
 /**
  * Sends a request against each candidate base URL until one answers.
  *
@@ -524,19 +641,21 @@ interface HostFailure {
  * 500 is returned to the caller as-is, so 4xx handling stays deterministic
  * and never falls back.
  */
-async function sendAcrossHosts(
+async function sendAcrossHosts<T extends HostResponseLike>(
   hosts: string[],
   endpoint: string,
-  send: (baseUrl: string, signal?: AbortSignal) => Promise<Response>,
-  onHostSuccess?: (host: string, failures: HostFailure[]) => void
-): Promise<Response> {
+  send: (baseUrl: string, signal?: AbortSignal) => Promise<T>,
+  onHostSuccess?: (host: string, failures: HostFailure[]) => void,
+  options: SendAcrossHostsOptions = {}
+): Promise<T> {
   const failures: HostFailure[] = [];
+  const timeoutMs = options.timeoutMs ?? API_FETCH_TIMEOUT_MS;
 
   for (const base of hosts) {
     for (let attempt = 0; attempt < 2; attempt++) {
       const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeout = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
-      let response: Response;
+      const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      let response: T;
       try {
         response = await send(base, controller?.signal);
       } catch (err: any) {
@@ -556,6 +675,13 @@ async function sendAcrossHosts(
         failures.push({ host: base, error: `HTTP ${response.status}` });
         break;
       }
+      const mitigation = response.status === 403
+        ? response.headers?.get?.("x-vercel-mitigated")
+        : null;
+      if (mitigation) {
+        failures.push({ host: base, error: `HTTP 403 (${mitigation})` });
+        break;
+      }
       onHostSuccess?.(base, failures);
       return response;
     }
@@ -564,6 +690,28 @@ async function sendAcrossHosts(
   throw new Error(
     `All hosts failed for ${endpoint}: ${failures.map((f) => `${f.host}: ${f.error}`).join("; ")}`
   );
+}
+
+/**
+ * Railway document URLs contain a full-payload content revision in the final
+ * path segment. Different placements can therefore point at the same immutable
+ * document under different URLs; collapse those downloads without changing the
+ * placement-specific URL or integrity metadata stored in config.
+ */
+function hostedDocumentHydrationKey(document: WebViewDocumentSpec): string {
+  const url = document.url || "";
+  const path = url.split(/[?#]/, 1)[0] || "";
+  const encodedName = path.slice(path.lastIndexOf("/") + 1);
+  let name = encodedName;
+  try {
+    name = decodeURIComponent(encodedName);
+  } catch {
+    // Keep the encoded path when a custom document URL contains malformed escapes.
+  }
+  const isTranzmitHostedPath = /\/v1\/paywall-documents\/[^/]+\/[^/]+\/[^/]+$/i.test(path);
+  return isTranzmitHostedPath && /:doc-[a-f0-9]{12}\.json$/i.test(name)
+    ? `content:${originOf(url) || ""}:${name}:${document.integrity || ""}`
+    : `url:${url}`;
 }
 
 function originOf(url: string): string | null {
