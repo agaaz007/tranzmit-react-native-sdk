@@ -19,6 +19,7 @@ export default function WebView({
   allowFileAccess,
   allowUniversalAccessFromFileURLs,
   mixedContentMode,
+  injectedJavaScriptBeforeContentLoaded,
 }: any) {
   const html = source?.html || "";
   useEffect(() => {
@@ -29,7 +30,20 @@ export default function WebView({
     if (!html.includes("data-skip-load-end")) {
       onLoadEnd?.({ nativeEvent: {} });
     }
-  }, [html, onError, onLoadEnd]);
+    if (injectedJavaScriptBeforeContentLoaded) {
+      const exposureId = /"exposure_id":"([^"]+)"/.exec(injectedJavaScriptBeforeContentLoaded)?.[1];
+      const bridgeNonce = /"bridge_nonce":"([^"]+)"/.exec(injectedJavaScriptBeforeContentLoaded)?.[1];
+      if (exposureId && bridgeNonce) {
+        onMessage?.({ nativeEvent: { data: JSON.stringify({
+          type: "telemetry",
+          event: "render_confirmed",
+          exposure_id: exposureId,
+          bridge_nonce: bridgeNonce,
+          properties: {},
+        }) } });
+      }
+    }
+  }, [html, injectedJavaScriptBeforeContentLoaded, onError, onLoadEnd, onMessage]);
 
   const body = html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -62,6 +76,7 @@ export default function WebView({
       <span data-testid="tranzmit-webview-file-access">{String(allowFileAccess)}</span>
       <span data-testid="tranzmit-webview-universal-file-access">{String(allowUniversalAccessFromFileURLs)}</span>
       <span data-testid="tranzmit-webview-mixed-content">{String(mixedContentMode)}</span>
+      <span data-testid="tranzmit-webview-telemetry-script">{String(injectedJavaScriptBeforeContentLoaded || "")}</span>
       {headings.map((text) => (
         <span key={text}>{text}</span>
       ))}

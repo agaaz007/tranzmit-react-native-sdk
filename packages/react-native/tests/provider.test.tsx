@@ -193,7 +193,10 @@ describe("TranzmitProvider", () => {
     await waitFor(() => expect(getByText("Unlock Pro")).toBeTruthy());
     fireEvent.click(getByText("Start Free Trial").closest("button")!);
 
-    expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
+    expect(onCTA).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pro_monthly" }),
+      expect.objectContaining({ exposureId: expect.any(String) })
+    );
   });
 
   it("localizes a gated paywall using the provider locale", async () => {
@@ -276,8 +279,9 @@ describe("TranzmitProvider", () => {
     const onImpression = vi.fn();
     const onPreloadFlushed = vi.fn();
     const onGateFlushed = vi.fn();
+    const onExperimentExposure = vi.fn();
     const { getAllByTestId, getByText, rerender } = render(
-      <TranzmitProvider publicKey="pk_test_demo">
+      <TranzmitProvider publicKey="pk_test_demo" onExperimentExposure={onExperimentExposure}>
         <PreloadHarness
           onCTA={onCTA}
           onGate={onGate}
@@ -292,7 +296,7 @@ describe("TranzmitProvider", () => {
     expect(flushedEvents().some((event) => event.event === "impression")).toBe(false);
 
     rerender(
-      <TranzmitProvider publicKey="pk_test_demo">
+      <TranzmitProvider publicKey="pk_test_demo" onExperimentExposure={onExperimentExposure}>
         <PreloadHarness
           gateAfterPreload
           onCTA={onCTA}
@@ -307,17 +311,41 @@ describe("TranzmitProvider", () => {
     await waitFor(() => expect(onGate).toHaveBeenCalledWith(expect.objectContaining({
       shown: true,
       variantId: "var_a",
+      exposureId: expect.any(String),
     })));
     await waitFor(() => expect(onGateFlushed).toHaveBeenCalledTimes(1));
     expect(onImpression).toHaveBeenCalledTimes(1);
+    expect(onExperimentExposure).toHaveBeenCalledWith(expect.objectContaining({
+      exposureId: expect.any(String),
+      experimentId: "experiment_1",
+      variantId: "var_a",
+      decisionId: "decision_1",
+    }));
     expect(getAllByTestId("tranzmit-webview")).toHaveLength(1);
 
+    await waitFor(() => expect(
+      flushedEvents().filter((event) => event.event === "impression")
+    ).toHaveLength(1));
     const impressions = flushedEvents().filter((event) => event.event === "impression");
     expect(impressions).toHaveLength(1);
     expect(impressions[0].properties.trigger).toBe("upgrade_pro");
+    expect(impressions[0].properties).toMatchObject({
+      exposure_id: expect.any(String),
+      paywall_id: "paywall_1",
+      variant_id: "var_a",
+      creative_id: "creative_1",
+      decision_id: "decision_1",
+      snapshot_id: "snapshot_1",
+      experiment_id: "experiment_1",
+      experiment_snapshot_id: "experiment_snapshot_1",
+      decision_token: "signed_decision_1",
+    });
 
     fireEvent.click(getByText("Start Free Trial").closest("button")!);
-    expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
+    expect(onCTA).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pro_monthly" }),
+      expect.objectContaining({ exposureId: impressions[0].properties.exposure_id })
+    );
   });
 
   it("calls fallback when gate is requested before Tranzmit is ready", async () => {
@@ -376,7 +404,7 @@ describe("TranzmitProvider", () => {
     );
 
     await waitFor(() => expect(getByText("ready")).toBeTruthy());
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(configFetches(fetchMock)).toHaveLength(1);
 
     rerender(
       <TranzmitProvider publicKey="pk_test_demo" userId="user_123">
@@ -384,9 +412,9 @@ describe("TranzmitProvider", () => {
       </TranzmitProvider>
     );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(configFetches(fetchMock)).toHaveLength(2));
     await waitFor(() => expect(getByText("ready")).toBeTruthy());
-    const configBody = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+    const configBody = JSON.parse(configFetches(fetchMock)[1][1]!.body as string);
     expect(configBody.identity.userId).toBe("user_123");
   });
 
@@ -437,7 +465,10 @@ describe("TranzmitProvider", () => {
 
     await waitFor(() => expect(getByText("Hosted Upgrade")).toBeTruthy());
     fireEvent.click(getByText("Buy Hosted").closest("button")!);
-    expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
+    expect(onCTA).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pro_monthly" }),
+      expect.objectContaining({ exposureId: expect.any(String) })
+    );
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/v1/paywall-documents/"),
       expect.anything(),
@@ -536,6 +567,10 @@ function flushedEvents() {
       const body = init?.body ? JSON.parse(init.body as string) : {};
       return body.events || [];
     });
+}
+
+function configFetches(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(([url]) => String(url).includes("/v1/config"));
 }
 
 function RenderErrorHarness({ onFallback }: { onFallback?: any }) {

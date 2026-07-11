@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, PixelRatio, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
-import { verifyDocumentIntegrity, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
+import {
+  parseSemanticBridgeMessage,
+  verifyDocumentIntegrity,
+  type BridgeExpectation,
+  type PaywallSpec,
+  type ProductSpec,
+  type SemanticBridgeEvent,
+} from "@tranzmit/shared";
 import type { PaywallUserContext, PresentationMode } from "../types.js";
 import { defaultProduct, renderDocument, type PaywallViewportContract } from "./compose.js";
+import { buildSemanticTelemetryScript } from "./telemetryBridge.js";
 
 export type { PaywallViewportContract } from "./compose.js";
 
@@ -23,6 +31,8 @@ export interface SpecRendererProps {
   onDismiss: () => void;
   onError?: (error: Error) => void;
   onReady?: () => void;
+  telemetryContext?: BridgeExpectation;
+  onTelemetry?: (event: SemanticBridgeEvent) => void;
 }
 
 export function SpecRenderer({
@@ -34,6 +44,8 @@ export function SpecRenderer({
   onDismiss,
   onError,
   onReady,
+  telemetryContext,
+  onTelemetry,
 }: SpecRendererProps) {
   const windowSize = useWindowDimensions();
   const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0, bottom: 0, left: 0, right: 0 };
@@ -78,6 +90,15 @@ export function SpecRenderer({
       return;
     }
     if (!isPlainObject(message)) return;
+
+    if (telemetryContext) {
+      const semantic = parseSemanticBridgeMessage(raw, telemetryContext);
+      if (semantic) {
+        onTelemetry?.(semantic);
+        if (semantic.event === "render_confirmed") markReady();
+        return;
+      }
+    }
 
     const type = String(message.type || message.action || "");
     if (!isAllowed(spec, type)) return;
@@ -142,6 +163,9 @@ export function SpecRenderer({
       <WebView
         originWhitelist={originWhitelist(spec)}
         source={{ html, baseUrl: spec.document?.baseUrl }}
+        injectedJavaScriptBeforeContentLoaded={telemetryContext
+          ? buildSemanticTelemetryScript(telemetryContext)
+          : undefined}
         javaScriptEnabled
         javaScriptCanOpenWindowsAutomatically={false}
         domStorageEnabled={false}
@@ -156,7 +180,7 @@ export function SpecRenderer({
         onError={handleRenderError}
         onHttpError={handleRenderError}
         onContentProcessDidTerminate={() => onError?.(new Error("Tranzmit WebView content process terminated"))}
-        onLoadEnd={markReady}
+        onLoadEnd={telemetryContext ? undefined : markReady}
         onShouldStartLoadWithRequest={shouldStart}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PlacementConfig, ProductSpec } from "@tranzmit/shared";
+import type { ExposureContext, ExposureOutcomeInput, PlacementConfig, ProductSpec } from "@tranzmit/shared";
 
 export type PresentationMode = "modal" | "sheet" | "fullscreen" | "inline";
 export type FallbackReason =
@@ -30,12 +30,14 @@ export interface TranzmitProviderProps {
    */
   locale?: string;
   onError?: (error: Error) => void;
+  onExperimentExposure?: (exposure: ManualExperimentExposure) => void;
+  replay?: ReplayTelemetryPolicy;
   debug?: boolean;
   children: ReactNode;
 }
 
 export interface GateOptions {
-  onCTA?: (product: ProductSpec) => void;
+  onCTA?: (product: ProductSpec, checkout: CheckoutContext) => void;
   onDismiss?: () => void;
   onFallback?: (event: FallbackEvent) => void;
   onImpression?: () => void;
@@ -69,7 +71,28 @@ export interface FallbackEvent {
 export interface GateResult {
   shown: boolean;
   variantId?: string;
+  exposureId?: string;
+  sessionId?: string;
   dismiss: () => void;
+}
+
+export type CheckoutContext = ExposureContext;
+
+export interface ManualExperimentExposure {
+  readonly exposureId: string;
+  readonly experimentId?: string;
+  readonly experimentSnapshotId?: string;
+  readonly variantId: string;
+  readonly variantKey: string;
+  readonly decisionId?: string;
+  readonly stableID?: string;
+  readonly userID?: string;
+}
+
+export interface ReplayTelemetryPolicy {
+  readonly consent: boolean;
+  readonly samplePercent?: number;
+  readonly retentionDays?: 30;
 }
 
 export interface ReportConversionData {
@@ -90,6 +113,7 @@ export interface TranzmitContextValue {
   preloadPlacement: (trigger: string, options?: PreloadPlacementOptions) => Promise<PreloadResult>;
   track: (event: string, properties?: Record<string, unknown>) => void;
   reportConversion: (data: ReportConversionData) => void;
+  reportOutcome: (data: ExposureOutcomeInput) => void;
   refreshConfig: () => Promise<void>;
   setTraits: (traits: Record<string, unknown>, options?: { merge?: boolean }) => Promise<void>;
   flush: () => Promise<void>;
@@ -103,6 +127,8 @@ export interface ActivePaywall {
   presentation: PresentationMode;
   options: GateOptions;
   shownAt: number;
+  exposure: ExposureContext;
+  bridgeNonce: string;
 }
 
 export interface PreloadedPaywall {

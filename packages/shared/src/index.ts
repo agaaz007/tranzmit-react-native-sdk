@@ -28,6 +28,7 @@ export type {
 export type {
   TranzmitIdentity,
   ConfigRequest,
+  IdentityStorage,
 } from "./identity.js";
 
 export {
@@ -48,6 +49,29 @@ export type {
   EventBatch,
   EventName,
 } from "./events.js";
+
+export {
+  DurableTelemetryQueue,
+  TelemetryQueueError,
+  deterministicReplaySample,
+  exposureContextFromPlacement,
+  generateUuid,
+  hasExactExposureLinkage,
+  sanitizeTelemetryProperties,
+  type ExposureContext,
+  type CheckoutOutcomeStatus,
+  type ExposureOutcomeInput,
+  type QueuedTelemetryEvent,
+  type SemanticPaywallEventName,
+  type TelemetryBatch,
+  type TelemetryEventInput,
+} from "./telemetry.js";
+
+export {
+  parseSemanticBridgeMessage,
+  type BridgeExpectation,
+  type SemanticBridgeEvent,
+} from "./semantic-bridge.js";
 
 export {
   DEFAULT_API_BASE_URL,

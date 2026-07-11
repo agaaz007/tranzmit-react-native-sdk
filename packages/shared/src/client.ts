@@ -3,6 +3,13 @@ import type { ConfigResponse, PlacementConfig } from "./config.js";
 import type { TranzmitIdentity } from "./identity.js";
 import { hashString, resolveIdentity, stableJson } from "./identity.js";
 import { PaywallIntegrityError, assertDocumentIntegrity } from "./integrity.js";
+import {
+  DurableTelemetryQueue,
+  hasExactExposureLinkage,
+  sanitizeTelemetryProperties,
+  type ExposureContext,
+  type ExposureOutcomeInput,
+} from "./telemetry.js";
 
 export const DEFAULT_API_BASE_URL = "https://api.tranzmitai.com";
 
@@ -49,20 +56,19 @@ export interface SharedClient {
   setTraits(traits: Record<string, unknown>, options?: { merge?: boolean }): Promise<void>;
   getPlacement(trigger: string): PlacementConfig | null;
   track(event: string, properties?: Record<string, unknown>): void;
+  trackExposureEvent(
+    event: string,
+    context: ExposureContext,
+    properties?: Record<string, unknown>
+  ): void;
   reportConversion(data: Record<string, unknown>): void;
+  reportExposureOutcome(data: ExposureOutcomeInput): void;
   flush(): Promise<void>;
   isReady(): boolean;
   getConfig(): ConfigResponse | null;
   getSessionId(): string;
   getIdentity(): TranzmitIdentity | null;
   reset(): void;
-}
-
-interface QueuedEvent {
-  event: string;
-  timestamp: number;
-  properties?: Record<string, unknown>;
-  attempts: number;
 }
 
 export function createTranzmitClient(
@@ -76,7 +82,11 @@ export function createTranzmitClient(
   let initPromise: Promise<void> | null = null;
   let currentInitKey: string | null = null;
   let sessionId = generateSessionId();
-  let queue: QueuedEvent[] = [];
+  let telemetryQueue: DurableTelemetryQueue | null = null;
+  let pendingTelemetryWrite = Promise.resolve();
+  let queuedTelemetryCount = 0;
+  let activeFlush: Promise<void> | null = null;
+  let flushRequested = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribeBackground: (() => void) | null = null;
   let unsubscribeForeground: (() => void) | null = null;
@@ -239,7 +249,10 @@ export function createTranzmitClient(
 
     clearLifecycle();
     clearFlushTimer();
-    queue = [];
+    telemetryQueue = new DurableTelemetryQueue(config.publicKey, adapter.storage);
+    await telemetryQueue.load();
+    pendingTelemetryWrite = Promise.resolve();
+    queuedTelemetryCount = telemetryQueue.pendingCount();
     currentConfig = config;
     currentIdentity = identity;
     currentInitKey = nextKey;
@@ -354,25 +367,45 @@ export function createTranzmitClient(
   }
 
   function track(event: string, properties?: Record<string, unknown>): void {
-    if (!currentConfig) return;
-    queue.push({
+    if (!currentConfig || !telemetryQueue) return;
+    const queue = telemetryQueue;
+    pendingTelemetryWrite = pendingTelemetryWrite.then(() => queue.enqueue({
       event,
       timestamp: Date.now(),
-      properties: addMetadata(properties),
-      attempts: 0,
-    });
+      properties: addMetadata(sanitizeTelemetryProperties(properties)) ?? {},
+    }));
+    queuedTelemetryCount += 1;
 
-    if (queue.length > 100) {
-      queue = queue.slice(queue.length - 100);
-    }
-
-    if (queue.length >= 10) {
+    if (queuedTelemetryCount >= 10) {
       void flush();
     } else if (!timer) {
       timer = setTimeout(() => {
         void flush();
       }, 30_000);
     }
+  }
+
+  function trackExposureEvent(
+    event: string,
+    context: ExposureContext,
+    properties?: Record<string, unknown>
+  ): void {
+    track(event, {
+      ...properties,
+      exposure_id: context.exposureId,
+      session_id: context.sessionId,
+      trigger: context.trigger,
+      paywall_id: context.paywallId,
+      variant_id: context.variantId,
+      variant_key: context.variantKey,
+      creative_id: context.creativeId,
+      decision_id: context.decisionId,
+      snapshot_id: context.snapshotId,
+      experiment_id: context.experimentId,
+      experiment_snapshot_id: context.experimentSnapshotId,
+      decision_token: context.decisionToken,
+      linkage_quality: hasExactExposureLinkage(context) ? "exact" : "legacy_partial",
+    });
   }
 
   function reportConversion(data: Record<string, unknown>): void {
@@ -382,14 +415,42 @@ export function createTranzmitClient(
     void flush();
   }
 
-  async function flush(): Promise<void> {
-    if (!currentConfig || queue.length === 0) return;
+  function flush(): Promise<void> {
+    if (activeFlush) {
+      flushRequested = true;
+      return activeFlush;
+    }
+    activeFlush = performFlush().finally(() => {
+      activeFlush = null;
+      if (flushRequested || queuedTelemetryCount >= 10) {
+        flushRequested = false;
+        void flush();
+      }
+    });
+    return activeFlush;
+  }
+
+  function reportExposureOutcome(data: ExposureOutcomeInput): void {
+    trackExposureEvent("checkout_outcome", data.exposure, {
+      outcome_status: data.outcome.status,
+      product_id: data.outcome.productId,
+      transaction_id: data.outcome.transactionId,
+      revenue: data.outcome.revenue,
+      currency: data.outcome.currency,
+    });
+    void flush();
+  }
+
+  async function performFlush(): Promise<void> {
+    if (!currentConfig || !telemetryQueue) return;
 
     clearFlushTimer();
-    const batch = queue.splice(0, queue.length);
+    await pendingTelemetryWrite;
+    const batch = await telemetryQueue.beginBatch();
+    if (!batch) return;
 
     if (typeof fetch !== "function") {
-      requeue(batch);
+      await telemetryQueue.retry(batch.batchId);
       return;
     }
 
@@ -407,10 +468,14 @@ export function createTranzmitClient(
               publicKey: config.publicKey,
               userId: config.userId,
               identity: currentIdentity || undefined,
-              traits: config.userTraits || {},
-              privateTraits: config.privateTraits || {},
               sessionId,
-              events: batch.map(({ attempts: _attempts, ...event }) => event),
+              batch_id: batch.batchId,
+              events: batch.events.map((event) => ({
+                event_id: event.eventId,
+                event: event.event,
+                timestamp: event.timestamp,
+                properties: event.properties,
+              })),
             }),
           }),
         noteHostSuccess(config, "/v1/events")
@@ -419,8 +484,10 @@ export function createTranzmitClient(
       if (!response.ok) {
         throw new Error(`Event flush failed: HTTP ${response.status}`);
       }
+      await telemetryQueue.acknowledge(batch.batchId);
+      queuedTelemetryCount = telemetryQueue.pendingCount();
     } catch {
-      requeue(batch);
+      await telemetryQueue.retry(batch.batchId);
     }
   }
 
@@ -434,7 +501,11 @@ export function createTranzmitClient(
     initPromise = null;
     currentInitKey = null;
     sessionId = generateSessionId();
-    queue = [];
+    telemetryQueue = null;
+    pendingTelemetryWrite = Promise.resolve();
+    queuedTelemetryCount = 0;
+    activeFlush = null;
+    flushRequested = false;
     activeApiBaseUrl = null;
   }
 
@@ -457,13 +528,6 @@ export function createTranzmitClient(
     };
   }
 
-  function requeue(events: QueuedEvent[]): void {
-    const retryable = events
-      .map((event) => ({ ...event, attempts: event.attempts + 1 }))
-      .filter((event) => event.attempts <= 3);
-    queue = [...retryable, ...queue].slice(-100);
-  }
-
   function clearLifecycle(): void {
     unsubscribeBackground?.();
     unsubscribeForeground?.();
@@ -484,7 +548,9 @@ export function createTranzmitClient(
     setTraits,
     getPlacement,
     track,
+    trackExposureEvent,
     reportConversion,
+    reportExposureOutcome,
     flush,
     isReady: () => initialized,
     getConfig: () => configResponse,

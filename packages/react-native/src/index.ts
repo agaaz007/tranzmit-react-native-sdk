@@ -7,10 +7,14 @@ export type {
   FallbackReason,
   GateOptions,
   GateResult,
+  CheckoutContext,
+  ManualExperimentExposure,
   PaywallUserContext,
   PresentationMode,
   ReportConversionData,
+  ReplayTelemetryPolicy,
   TranzmitContextValue,
   TranzmitProviderProps,
 } from "./types.js";
 export type { PaywallSpec, ProductSpec } from "@tranzmit/shared";
+export type { CheckoutOutcomeStatus, ExposureOutcomeInput } from "@tranzmit/shared";
