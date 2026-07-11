@@ -2,6 +2,17 @@
 
 All notable changes to the Tranzmit React Native SDK packages (`@tranzmit/react-native`, `@tranzmit/shared`) are documented here. Dates are UTC and correspond to the npm publish time.
 
+## [react-native 0.3.1, shared 0.3.1] - 2026-07-11
+
+### Fixed
+
+- Hosted paywall hydration now downloads each content-addressed document once, single-flights the same document across overlapping refreshes, and fetches unique documents serially. Multiple placements that resolve to the same immutable document no longer compete for bandwidth by downloading the same 188 KB payload in parallel.
+- Hosted documents now have a dedicated 20-second mobile timeout that covers response-body consumption; config and analytics retain their 8-second timeout. After a host switch, later documents use the healthy sticky host first instead of waiting on the failed origin again.
+- Superseded background config refreshes can no longer overwrite a newer trait-routed config or cache entry.
+- Vercel system mitigation responses (`403` with `x-vercel-mitigated`) can fall back to the preserved Railway host instead of failing as a terminal application-level 403.
+
+No renderer, presentation, product, HTML, CSS, JavaScript, localization, integrity, or billing behavior changed in this release.
+
 ## [react-native 0.3.0, shared 0.3.0] - 2026-07-07
 
 ### Changed
