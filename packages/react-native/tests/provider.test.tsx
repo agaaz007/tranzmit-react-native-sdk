@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { sha256Integrity } from "@tranzmit/shared";
 import { TranzmitProvider, TranzmitPaywall, useTranzmit } from "../src/index.js";
@@ -127,6 +127,63 @@ function PreloadHarness({
       cancelled = true;
     };
   }, [flush, gate, gateAfterPreload, isReady, onCTA, onGate, onGateFlushed, onImpression, onPreload, onPreloadFlushed, preloadPlacement]);
+
+  return <div>{isReady ? "ready" : "loading"}</div>;
+}
+
+const checkoutSpec = {
+  ...baseSpec,
+  bridge: { version: 1 as const },
+  checkout: { provider: { orderToken: "tok_upi_1" } },
+  document: {
+    html: `
+      <main class="paywall">
+        <h1>Unlock Pro</h1>
+        <button data-tranzmit-action="cta" data-product-id="pro_monthly" data-payment-app="gpay">Pay With App</button>
+        <button data-tranzmit-action="custom_action" data-action-name="checkout_app_selected" data-payload-app="gpay">Pick GPay</button>
+        <button data-tranzmit-action="custom_action" data-action-name="checkout_app_selected" data-payload-app="com.example.upi">Pick Other</button>
+      </main>
+    `,
+  },
+};
+
+const checkoutConfig = {
+  ...mockConfig,
+  placements: {
+    upgrade_pro: {
+      ...mockConfig.placements.upgrade_pro!,
+      spec: checkoutSpec,
+    },
+  },
+};
+
+const installedApps = [
+  { packageName: "com.google.android.apps.nbu.paisa.user" },
+  { packageName: "com.example.upi", name: "Example UPI" },
+];
+
+function CheckoutGateHarness({ dismissOnCTA, onCTA, onGate, onValue }: {
+  dismissOnCTA?: boolean;
+  onCTA?: any;
+  onGate?: any;
+  onValue?: any;
+}) {
+  const value = useTranzmit();
+  const { isReady, gate } = value;
+
+  useEffect(() => {
+    onValue?.(value);
+  }, [onValue, value]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    const result = gate("upgrade_pro", {
+      presentation: "inline",
+      dismissOnCTA,
+      onCTA,
+    });
+    onGate?.(result);
+  }, [dismissOnCTA, gate, isReady, onCTA, onGate]);
 
   return <div>{isReady ? "ready" : "loading"}</div>;
 }
@@ -526,6 +583,122 @@ describe("TranzmitProvider", () => {
       error: expect.any(Error),
       variantId: "var_a",
     })));
+  });
+
+  it("delivers checkout context to gate onCTA and tracks payment_app on cta_click", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(checkoutConfig),
+      })
+    );
+    const onCTA = vi.fn();
+    let tranzmit: any;
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" checkoutApps={installedApps}>
+        <CheckoutGateHarness onCTA={onCTA} onValue={(value: any) => { tranzmit = value; }} />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Pay With App")).toBeTruthy());
+    expect(tranzmit.checkoutApps).toEqual([
+      { id: "gpay", name: "Google Pay", packageName: "com.google.android.apps.nbu.paisa.user" },
+      { id: "com.example.upi", name: "Example UPI", packageName: "com.example.upi" },
+    ]);
+
+    fireEvent.click(getByText("Pay With App").closest("button")!);
+
+    expect(onCTA).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pro_monthly" }),
+      {
+        paymentApp: { id: "gpay", name: "Google Pay", packageName: "com.google.android.apps.nbu.paisa.user" },
+        provider: { orderToken: "tok_upi_1" },
+      },
+    );
+
+    await tranzmit.flush();
+    const ctaClicks = flushedEvents().filter((event) => event.event === "cta_click");
+    expect(ctaClicks).toHaveLength(1);
+    expect(ctaClicks[0].properties.productId).toBe("pro_monthly");
+    expect(ctaClicks[0].properties.payment_app).toBe("gpay");
+    expect(ctaClicks[0].properties.trigger).toBe("upgrade_pro");
+  });
+
+  it("keeps the paywall up when dismissOnCTA is false and result.dismiss() still dismisses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(checkoutConfig),
+      })
+    );
+    const onCTA = vi.fn();
+    let gateResult: any;
+    const { getByText, queryByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" checkoutApps={installedApps}>
+        <CheckoutGateHarness dismissOnCTA={false} onCTA={onCTA} onGate={(result: any) => { gateResult = result; }} />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Pay With App")).toBeTruthy());
+    fireEvent.click(getByText("Pay With App").closest("button")!);
+
+    expect(onCTA).toHaveBeenCalledTimes(1);
+    // The paywall stays up so a failed UPI mandate does not strand the user.
+    expect(getByText("Pay With App")).toBeTruthy();
+
+    act(() => gateResult.dismiss());
+    await waitFor(() => expect(queryByText("Pay With App")).toBeNull());
+  });
+
+  it("tracks checkout_app_selected with a registry id passed through", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(checkoutConfig),
+      })
+    );
+    let tranzmit: any;
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" checkoutApps={installedApps}>
+        <CheckoutGateHarness onValue={(value: any) => { tranzmit = value; }} />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Pick GPay")).toBeTruthy());
+    fireEvent.click(getByText("Pick GPay").closest("button")!);
+
+    await tranzmit.flush();
+    const selections = flushedEvents().filter((event) => event.event === "checkout_app_selected");
+    expect(selections).toHaveLength(1);
+    expect(selections[0].properties.app).toBe("gpay");
+    expect(selections[0].properties.trigger).toBe("upgrade_pro");
+  });
+
+  it("tracks checkout_app_selected as other for unknown app ids", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(checkoutConfig),
+      })
+    );
+    let tranzmit: any;
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" checkoutApps={installedApps}>
+        <CheckoutGateHarness onValue={(value: any) => { tranzmit = value; }} />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Pick Other")).toBeTruthy());
+    fireEvent.click(getByText("Pick Other").closest("button")!);
+
+    await tranzmit.flush();
+    const selections = flushedEvents().filter((event) => event.event === "checkout_app_selected");
+    expect(selections).toHaveLength(1);
+    expect(selections[0].properties.app).toBe("other");
   });
 });
 

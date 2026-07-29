@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tz-paybar prototype — Tranzmit checkout bar</title>
+<style>
+/* ============================================================
+   PAGE CHROME (demo harness only — not part of the component)
+   ============================================================ */
+:root{
+  --page-bg:#14161a; --panel:#1d2026; --panel-edge:#2c3038; --txt:#e8eaee;
+  --muted:#9aa1ad; --btn:#262b33; --btn-on:#3d68e0; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page-bg);color:var(--txt);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+.page{display:flex;gap:20px;align-items:flex-start;justify-content:center;padding:24px;flex-wrap:wrap}
+.panel{background:var(--panel);border:1px solid var(--panel-edge);border-radius:12px;padding:16px}
+.controls{width:280px}
+.logpanel{width:340px;display:flex;flex-direction:column;max-height:86vh}
+.panel h2{margin:0 0 4px;font-size:14px;letter-spacing:.04em;text-transform:uppercase}
+.panel h3{margin:14px 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.panel .hint{font-size:11.5px;color:var(--muted);margin:6px 0 0}
+.btnrow{display:flex;flex-wrap:wrap;gap:6px}
+.controls button{display:block;width:100%;text-align:left;background:var(--btn);color:var(--txt);
+  border:1px solid var(--panel-edge);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;
+  cursor:pointer;margin:0 0 6px}
+.controls .btnrow button{width:auto;flex:1 1 auto;text-align:center;margin:0}
+.controls button.on{border-color:var(--btn-on);background:rgba(61,104,224,.18)}
+.controls button:hover{border-color:#4a5160}
+#cfgView{background:#111318;border:1px solid var(--panel-edge);border-radius:8px;padding:10px;
+  font-family:var(--mono);font-size:10.5px;line-height:1.5;color:#b9c2d0;white-space:pre-wrap;
+  word-break:break-all;max-height:220px;overflow:auto;margin:0}
+#log{flex:1 1 auto;overflow-y:auto;background:#111318;border:1px solid var(--panel-edge);
+  border-radius:8px;padding:8px;min-height:200px}
+.log-entry{margin:0 0 8px}
+.log-head{font-size:10px;color:#7f8896;letter-spacing:.03em;margin:0 0 2px}
+.log-entry pre{margin:0;font-family:var(--mono);font-size:11px;line-height:1.45;color:#c9e6b8;
+  background:#171a20;border-radius:6px;padding:6px 8px;white-space:pre-wrap;word-break:break-all}
+.log-note{font-size:10.5px;color:#8a93a1;border-top:1px dashed #2c3038;padding:6px 0 2px;margin:4px 0}
+#clearLog{margin-top:8px;background:var(--btn);color:var(--txt);border:1px solid var(--panel-edge);
+  border-radius:8px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
+
+/* ---- phone frame (demo harness) ---- */
+.stage{display:flex;flex-direction:column;align-items:center;gap:10px}
+.stage .devlabel{font-size:11px;color:var(--muted);letter-spacing:.05em}
+.phone-outer{position:relative}
+.phone{position:relative;border:10px solid #0a0b0d;border-radius:46px;overflow:hidden;
+  background:#000;transform-origin:top left;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+/* transform on .phone makes position:fixed inside it resolve against the phone,
+   mocking the WebView viewport for the scrim. */
+.phone .statusbar{position:absolute;top:0;left:0;right:0;z-index:9;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:rgba(0,0,0,.55)}
+.phone .home-indicator{position:absolute;left:50%;bottom:7px;transform:translateX(-50%);
+  width:120px;height:4px;border-radius:2px;background:rgba(0,0,0,.28);z-index:9;pointer-events:none}
+.phone .dismiss-x{position:absolute;left:14px;z-index:9;width:28px;height:28px;border-radius:50%;
+  background:rgba(20,12,6,.14);color:rgba(40,24,10,.75);display:grid;place-items:center;
+  font-size:15px;font-weight:700;cursor:pointer;user-select:none}
+[hidden]{display:none!important}
+
+/* ============================================================
+   SKELETON (verbatim values from _skeleton.mjs; vh/vw units are
+   translated to the injected --tz-vh/--tz-vw so clamps are honest
+   inside the phone frame instead of reading the desktop viewport)
+   ============================================================ */
+.tz-template{height:var(--tz-vh);max-height:var(--tz-vh);display:flex;flex-direction:column;
+  align-items:center;padding-top:var(--tz-safe-top,0px);padding-bottom:var(--tz-safe-bottom,0px);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.tz-template *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+.tz-template button{border:0;color:inherit;font:inherit;cursor:pointer;background:transparent}
+.tz-shell{width:100%;max-width:412px;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
+  position:relative;
+  padding:8px calc(var(--tz-safe-right,0px) + 24px) 8px calc(var(--tz-safe-left,0px) + 24px)}
+.tz-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
+.tz-scroll>*{flex-shrink:0}
+.tz-scroll>:first-child{margin-top:auto}
+.tz-scroll>:last-child{margin-bottom:auto}
+.tz-footer{flex:0 0 auto;padding-top:8px}
+.cta{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;
+  min-height:clamp(60px,calc(var(--tz-vh) * 0.075),72px);
+  padding:clamp(16px,calc(var(--tz-vh) * 0.02),22px) clamp(20px,calc(var(--tz-vw) * 0.05),28px);
+  font-size:clamp(16px,calc(var(--tz-vw) * 0.044),19px);line-height:1.1;font-weight:900}
+.cta .cta-label{font-size:clamp(16px,calc(var(--tz-vw) * 0.044),19px);line-height:1.1}
+.cta .arrow{font-size:20px}
+/* dismiss reserve (real skeleton: @media (max-width:380px); demo uses .tz-reserve set by
+   JS in applyDevice() because media queries read the desktop viewport, not the frame) */
+.tz-template.tz-reserve .tz-scroll{padding-top:34px}
+
+/* ============================================================
+   TZ-PAYBAR — COMPONENT BASE CSS (sizing lives HERE, mirroring
+   the .cta rule; skins may only touch color/background/radius/
+   border-color/box-shadow/font-weight/letter-spacing)
+   ============================================================ */
+.tz-footer{position:relative;z-index:6}
+/* row must be positioned ABOVE the scrim inside the footer's stacking context —
+   .tz-footer's z-index alone does not lift unpositioned children over the
+   positioned scrim (z:5). Without this the scrim covers and disables the CTA. */
+.tz-paybar-row{display:flex;align-items:stretch;gap:8px;width:100%;position:relative;z-index:6}
+.tz-paybar-row .cta{flex:1 1 auto;min-width:0}
+.tz-paybar-toggle{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-start;
+  justify-content:center;gap:3px;max-width:45%;
+  min-height:clamp(60px,calc(var(--tz-vh) * 0.075),72px);padding:8px 12px}
+/* base owns border width/style; skins set border-color only. The toggle needs the
+   .tz-template prefix (0,2,0) to beat the skeleton's `.tz-template button{border:0}`
+   (0,1,1) — a bare .tz-paybar-toggle{border:...} silently loses and skins' border-color
+   would render 0px none. The drawer is a div, so single-class specificity suffices. */
+.tz-template .tz-paybar-toggle{border:1px solid transparent}
+.tz-paybar-toggle[disabled]{cursor:default}
+.tz-paybar-toggle-label{font-size:8.5px;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;opacity:.62;line-height:1}
+.tz-paybar-toggle-main{display:flex;align-items:center;gap:6px;min-width:0}
+.tz-paybar-app-icon{width:20px;height:20px;flex:0 0 auto;display:inline-grid;place-items:center}
+.tz-paybar-app-icon svg{width:100%;height:100%;display:block}
+.tz-paybar-toggle .tz-paybar-app-name{font-size:12px;font-weight:750;line-height:1.15;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:96px}
+.tz-paybar-chevron{width:7px;height:7px;flex:0 0 auto;
+  border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+  transform:rotate(-135deg) translate(-1px,1px);opacity:.65;transition:transform .18s ease}
+.tz-paybar-toggle[aria-expanded="true"] .tz-paybar-chevron{transform:rotate(45deg) translate(-1px,-1px)}
+/* compact mode — real component: @media (max-width:359px). Demo mirrors via .tz-compact.
+   Distinct from .tz-reserve (≤380px): a 360–380px Android frame keeps the full toggle
+   (label + app name) but still needs the dismiss-corner reserve above. */
+.tz-template.tz-compact .tz-paybar-toggle-label{display:none}
+.tz-template.tz-compact .tz-paybar-toggle .tz-paybar-app-name{display:none}
+.tz-template.tz-compact .tz-paybar-toggle{padding:8px 10px;flex-direction:row;gap:5px}
+/* scrim: fixed = WebView viewport (here: the transformed phone). z-index 5 clears every
+   sample's content (max seen: 4); footer sits at 6 so the bar stays tappable. */
+.tz-paybar-scrim{position:fixed;inset:0;z-index:5;background:rgba(20,10,4,.45);
+  opacity:0;pointer-events:none;transition:opacity .18s ease}
+.tz-paybar-scrim.is-open{opacity:1;pointer-events:auto}
+.tz-paybar-drawer{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:6;
+  overflow:hidden;transform:translateY(10px);opacity:0;pointer-events:none;
+  border:1px solid transparent; /* base owns border width/style; skins set border-color only */
+  transition:transform .2s ease,opacity .2s ease}
+.tz-paybar-drawer.is-open{transform:none;opacity:1;pointer-events:auto}
+.tz-paybar-drawer-title{font-size:10.5px;font-weight:800;letter-spacing:.06em;
+  text-transform:uppercase;padding:12px 14px 6px;opacity:.7}
+.tz-paybar-apps{overflow-y:auto;overscroll-behavior:contain}
+/* NOTE: an internally scrolling drawer is the documented, conscious deviation from the
+   "exactly one .tz-scroll" rule; height is capped at maxVisibleApps rows (set by JS). */
+.tz-paybar-app{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;
+  padding:9px 14px;text-align:left}
+.tz-paybar-app .tz-paybar-app-icon{width:24px;height:24px}
+.tz-paybar-app .tz-paybar-app-name{flex:1 1 auto;min-width:0;font-size:13px;font-weight:700;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tz-paybar-app-radio{width:18px;height:18px;flex:0 0 auto;border-radius:50%;
+  border:2px solid currentColor;opacity:.3}
+.tz-paybar-app.is-selected .tz-paybar-app-radio{opacity:1;
+  background:radial-gradient(circle,currentColor 0 42%,transparent 46%)}
+
+/* ============================================================
+   CONTENT STRUCTURE (mini paywall body — sizes only; colors in skins)
+   ============================================================ */
+.hero{text-align:center;padding:8px 0 4px}
+.eyebrow{font-size:9.5px;font-weight:850;letter-spacing:.14em;text-transform:uppercase;margin:0 0 8px}
+.headline{font-size:26px;font-weight:900;line-height:1.12;margin:0 0 8px}
+.sub{font-size:12px;font-weight:600;line-height:1.45;margin:0 auto;max-width:300px}
+.plan-card{margin:16px 0 0;padding:14px 16px;display:flex;align-items:center;gap:12px}
+.plan-name{font-size:12.5px;font-weight:850;margin:0 0 2px}
+.plan-detail{font-size:10.5px;font-weight:650;margin:0;opacity:.75}
+.plan-price{margin-left:auto;text-align:right}
+.plan-price .big{font-size:20px;font-weight:900;line-height:1}
+.plan-price .small{font-size:9.5px;font-weight:700;opacity:.7}
+.bullets{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:7px}
+.bullets li{font-size:11.5px;font-weight:650;display:flex;gap:8px;align-items:baseline}
+.bullets li::before{content:"✓";font-weight:900}
+.footer{width:100%;text-align:center;line-height:1.28;margin-top:8px}
+
+/* ============================================================
+   SKIN A — "ember" (warm, marriage-01 family). Note: paybar rules
+   below touch ONLY color/background/border/radius/shadow/weight.
+   ============================================================ */
+.skin-ember{background:linear-gradient(180deg,#fff7ea 0%,#ffe9d0 100%);color:#3a2417}
+.skin-ember .eyebrow{color:#b0641f}
+.skin-ember .sub{color:#6b5136}
+.skin-ember .plan-card{border:1px solid rgba(178,117,55,.25);border-radius:14px;
+  background:rgba(255,248,238,.9);box-shadow:0 6px 16px rgba(96,58,22,.10)}
+.skin-ember .plan-price .big{color:#c53a00}
+.skin-ember .bullets li::before{color:#c53a00}
+.skin-ember .cta{border-radius:10px;background:linear-gradient(90deg,#eb760f 0%,#e23000 100%);
+  color:#fff7e3;box-shadow:0 10px 20px rgba(205,74,6,.19)}
+.skin-ember .footer{color:#4e3a2b;font-size:9.8px;font-weight:650}
+.skin-ember .tz-paybar-toggle{background:rgba(255,243,223,.92);color:#4e3a2b;
+  border-color:rgba(178,117,55,.3);border-radius:10px}
+.skin-ember .tz-paybar-drawer{background:#fffaf2;border-color:rgba(178,117,55,.28);
+  border-radius:16px;box-shadow:0 14px 34px rgba(96,58,22,.24);color:#3a2417}
+.skin-ember .tz-paybar-drawer-title{color:#8a6238}
+.skin-ember .tz-paybar-app.is-selected{color:#c53a00;background:rgba(235,118,15,.08)}
+.skin-ember .tz-paybar-scrim{background:rgba(46,22,6,.42)}
+
+/* ============================================================
+   SKIN B — "indigo" (proves skin-vs-structure separation: same
+   markup + base sizing, different colors/radii only)
+   ============================================================ */
+.skin-indigo{background:linear-gradient(180deg,#f4f5ff 0%,#e5e7ff 100%);color:#23244d}
+.skin-indigo .eyebrow{color:#5a5fd6}
+.skin-indigo .sub{color:#4c4e79}
+.skin-indigo .plan-card{border:1px solid rgba(79,70,229,.22);border-radius:20px;
+  background:rgba(250,250,255,.92);box-shadow:0 6px 16px rgba(49,46,129,.10)}
+.skin-indigo .plan-price .big{color:#4338ca}
+.skin-indigo .bullets li::before{color:#4338ca}
+.skin-indigo .cta{border-radius:999px;background:linear-gradient(90deg,#6366f1 0%,#4338ca 100%);
+  color:#eef2ff;box-shadow:0 10px 22px rgba(67,56,202,.28)}
+.skin-indigo .footer{color:#4c4e79;font-size:9.8px;font-weight:650}
+.skin-indigo .tz-paybar-toggle{background:#eef1ff;color:#312e81;
+  border-color:rgba(79,70,229,.28);border-radius:999px}
+.skin-indigo .tz-paybar-drawer{background:#fbfbff;border-color:rgba(79,70,229,.25);
+  border-radius:22px;box-shadow:0 14px 34px rgba(49,46,129,.26);color:#23244d}
+.skin-indigo .tz-paybar-drawer-title{color:#5a5fd6}
+.skin-indigo .tz-paybar-app.is-selected{color:#4338ca;background:rgba(99,102,241,.09)}
+.skin-indigo .tz-paybar-scrim{background:rgba(24,22,64,.45)}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ======================= CONTROLS ======================= -->
+  <aside class="panel controls">
+    <h2>tz-paybar prototype</h2>
+    <p class="hint">Interactive contract demo. See CONTRACT.md beside this file. Icons are
+    <strong>placeholder glyphs</strong> (colored shapes + letters), not real trademarked logos.</p>
+
+    <h3>Scenario (re-injects window.TranzmitCheckout)</h3>
+    <div id="scenarioBtns"></div>
+
+    <h3>Skin (structure unchanged; colors/radius only)</h3>
+    <div class="btnrow" id="skinBtns">
+      <button data-skin="ember">A — Ember</button>
+      <button data-skin="indigo">B — Indigo</button>
+    </div>
+
+    <h3>Frame width</h3>
+    <div class="btnrow" id="deviceBtns">
+      <button data-dev="320">320 (SE)</button>
+      <button data-dev="360">360 (Android)</button>
+      <button data-dev="390">390</button>
+      <button data-dev="430">430</button>
+    </div>
+    <p class="hint">Two breakpoints (this feature is Android-only, so 360 matters):
+    ≤359 the toggle compacts to icon + chevron (real component:
+    <code>@media (max-width:359px)</code>); ≤380 the scroll area keeps the skeleton's
+    34px dismiss-corner reserve (real skeleton: <code>@media (max-width:380px)</code>).
+    At 360 the full toggle stays, only the reserve applies.</p>
+
+    <h3>Injected window.TranzmitCheckout</h3>
+    <pre id="cfgView"></pre>
+    <p class="hint">Scenario 5 includes an unknown app whose device-reported name contains
+    HTML — it is inserted with <code>textContent</code> only (untrusted-name rule), so it
+    renders as inert text.</p>
+  </aside>
+
+  <!-- ======================= PHONE ======================= -->
+  <div class="stage">
+    <div class="devlabel" id="devLabel"></div>
+    <div class="phone-outer" id="phoneOuter">
+      <div class="phone" id="phone">
+        <div class="statusbar" id="statusbar">9:41</div>
+        <div class="dismiss-x" id="dismissX" title="Native dismiss — drawn by the SDK outside the document DOM">×</div>
+        <main class="tz-template skin-ember" id="tpl">
+          <div class="tz-shell">
+            <div class="tz-scroll" id="scroll">
+              <div class="hero">
+                <div class="eyebrow">Tranzmit demo</div>
+                <h1 class="headline">Unlock every report</h1>
+                <p class="sub">Daily guidance, full compatibility reports and priority support — cancel anytime.</p>
+              </div>
+              <div class="plan-card">
+                <div>
+                  <p class="plan-name">Premium Monthly</p>
+                  <p class="plan-detail">7-day trial, then billed monthly</p>
+                </div>
+                <div class="plan-price"><div class="big">₹299</div><div class="small">per month</div></div>
+              </div>
+              <ul class="bullets">
+                <li>Unlimited detailed reports</li>
+                <li>Daily personalized guidance</li>
+                <li>Priority chat support</li>
+              </ul>
+            </div>
+            <footer class="tz-footer">
+              <div class="tz-paybar" id="paybar"><!-- built by JS per contract markup --></div>
+              <div class="footer">Cancel anytime · ₹1 trial for 7 days, then ₹299/month · Terms apply</div>
+            </footer>
+          </div>
+        </main>
+        <div class="home-indicator" id="homeInd"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= BRIDGE LOG ======================= -->
+  <aside class="panel logpanel">
+    <h2>Bridge log</h2>
+    <p class="hint" style="margin:0 0 8px">Every <code>window.Tranzmit.post(...)</code> payload
+    (webview → native), verbatim.</p>
+    <div id="log"></div>
+    <button id="clearLog">Clear log</button>
+  </aside>
+</div>
+
+<script>
+"use strict";
+/* ================================================================
+   KNOWN-APP REGISTRY (contract §g). Placeholder icons: colored
+   shape + letter(s). NOT real logos.
+   ================================================================ */
+var REGISTRY = {
+  paytm:     { name: "Paytm",      color: "#00a5e5", glyph: "P"  },
+  phonepe:   { name: "PhonePe",    color: "#5f259f", glyph: "Pe" },
+  gpay:      { name: "Google Pay", color: "#3b78e7", glyph: "G"  },
+  bhim:      { name: "BHIM",       color: "#ee7f2d", glyph: "B"  },
+  amazonpay: { name: "Amazon Pay", color: "#e68a00", glyph: "A"  },
+  cred:      { name: "CRED",       color: "#14171c", glyph: "C"  }
+};
+var GENERIC = { name: "UPI app", color: "#6b7280", glyph: "₹" }; /* generic UPI glyph */
+
+/* Mock localized strings (contract layer 2 — {{tokens}}, text-only, HTML-escaped upstream) */
+var STRINGS = {
+  checkout_pay_using: "PAY USING",
+  checkout_choose_app: "Pay using UPI app",
+  cta_label: "Start Trial"
+};
+
+var PRODUCT_ID = "monthly_299";
+
+/* ================================================================
+   MOCK BRIDGE — window.Tranzmit.post appends to the visible log
+   ================================================================ */
+var logEl = document.getElementById("log");
+function logMsg(obj) {
+  var wrap = document.createElement("div"); wrap.className = "log-entry";
+  var head = document.createElement("div"); head.className = "log-head";
+  head.textContent = "webview → native · " + new Date().toLocaleTimeString();
+  var pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(obj, null, 2);
+  wrap.appendChild(head); wrap.appendChild(pre);
+  logEl.appendChild(wrap); logEl.scrollTop = logEl.scrollHeight;
+}
+function logNote(text) {
+  var d = document.createElement("div"); d.className = "log-note";
+  d.textContent = text;
+  logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+}
+window.Tranzmit = {
+  post: function (m) { logMsg(m); },
+  cta: function (pid) { this.post({ type: "cta", productId: pid }); },
+  dismiss: function () { this.post({ type: "dismiss" }); },
+  customAction: function (name, payload) {
+    this.post({ type: "custom_action", name: name, payload: payload || {} });
+  }
+};
+document.getElementById("clearLog").addEventListener("click", function () { logEl.textContent = ""; });
+
+/* ================================================================
+   SCENARIOS — each fully replaces the mocked injected global
+   ================================================================ */
+function knownApps(ids) {
+  return ids.map(function (id) { return { id: id, name: REGISTRY[id].name }; });
+}
+function baseCfg(over) {
+  /* the seven CheckoutUiConfig keys — NO collapsedLabelToken (CONTRACT §a: the label
+     is the document's fixed {{checkout_pay_using}} token; copy changes edit the
+     translation VALUE, layer 2, no re-hash) */
+  var cfg = {
+    enabled: true, showToggle: true,
+    appPriority: ["phonepe", "gpay", "paytm", "bhim"],
+    defaultApp: "phonepe", maxVisibleApps: 5,
+    iconStyle: "tile", fallbackToPlainCta: true
+  };
+  Object.keys(over || {}).forEach(function (k) { cfg[k] = over[k]; });
+  return cfg;
+}
+var SCENARIOS = [
+  { key: "default4", title: "1 · Default — 4 apps",
+    checkout: { upiApps: knownApps(["paytm", "phonepe", "gpay", "bhim"]),
+                platform: "android", config: baseCfg() } },
+  { key: "single", title: "2 · Single app — chevron hidden",
+    checkout: { upiApps: knownApps(["gpay"]), platform: "android", config: baseCfg() } },
+  { key: "empty", title: "3 · upiApps empty — plain CTA",
+    checkout: { upiApps: [], platform: "android", config: baseCfg() } },
+  { key: "emptybadge", title: "3b · empty + fallbackToPlainCta:false — inert badge",
+    checkout: { upiApps: [], platform: "android",
+                config: baseCfg({ fallbackToPlainCta: false }) } },
+  { key: "notoggle", title: "4 · showToggle:false — silent routing",
+    checkout: { upiApps: knownApps(["paytm", "phonepe", "gpay", "bhim"]),
+                platform: "android", config: baseCfg({ showToggle: false, defaultApp: "gpay" }) } },
+  { key: "seven", title: "5 · 7 apps — drawer scrolls (max 5)",
+    checkout: { upiApps: knownApps(["paytm", "phonepe", "gpay", "bhim", "amazonpay", "cred"])
+                  .concat([{ id: "com.evil.fakepay",
+                             name: "FakePay <img src=x onerror=alert(1)> \"Ltd\"" }]),
+                platform: "android", config: baseCfg({ maxVisibleApps: 5 }) } },
+  { key: "oldsdk", title: "6 · Old SDK — no injection",
+    checkout: undefined }
+];
+
+var DEVICES = {
+  "320": { w: 320, h: 568, st: 20, sb: 0,  label: "iPhone SE · 320×568 · safe 20/0" },
+  "360": { w: 360, h: 800, st: 24, sb: 16, label: "Android · 360×800 · safe 24/16" },
+  "390": { w: 390, h: 844, st: 47, sb: 34, label: "iPhone 14 · 390×844 · safe 47/34" },
+  "430": { w: 430, h: 932, st: 59, sb: 34, label: "16 Pro Max · 430×932 · safe 59/34" }
+};
+
+var state = { scenario: "default4", skin: "ember", device: "390", selectedAppId: null, drawerOpen: false };
+/* Computed on every render; read by the click interceptor */
+var current = { mode: "plain", apps: [], cfg: {}, reason: "" };
+
+/* ================================================================
+   ACTIVATION LOGIC (contract §f) — reads the injected global lazily
+   ================================================================ */
+function computeCheckout() {
+  var c = window.TranzmitCheckout;
+  if (c === undefined || c === null || typeof c !== "object")
+    return { mode: "plain", apps: [], cfg: {}, reason: "no injection (old SDK)" };
+  var apps = Array.isArray(c.upiApps) ? c.upiApps : [];
+  var cfg = (c.config && typeof c.config === "object") ? c.config : {};
+  if (cfg.enabled === false) return { mode: "plain", apps: [], cfg: cfg, reason: "config.enabled=false" };
+  if (c.platform === "ios") return { mode: "plain", apps: [], cfg: cfg, reason: "platform=ios" };
+  if (apps.length === 0)
+    return { mode: cfg.fallbackToPlainCta === false ? "badge" : "plain", apps: [], cfg: cfg, reason: "no UPI apps detected" };
+  if (cfg.showToggle === false) return { mode: "silent", apps: apps, cfg: cfg, reason: "showToggle=false" };
+  return { mode: "toggle", apps: apps, cfg: cfg, reason: "" };
+}
+function orderApps(apps, cfg) {
+  var prio = Array.isArray(cfg.appPriority) ? cfg.appPriority : [];
+  var head = [], tail = [];
+  prio.forEach(function (id) {
+    apps.forEach(function (a) { if (a.id === id) head.push(a); });
+  });
+  apps.forEach(function (a) { if (head.indexOf(a) === -1) tail.push(a); });
+  return head.concat(tail);
+}
+function resolveSelected(apps, cfg) {
+  function has(id) { return apps.some(function (a) { return a.id === id; }); }
+  if (state.selectedAppId && has(state.selectedAppId)) return state.selectedAppId;
+  if (cfg.defaultApp && has(cfg.defaultApp)) return cfg.defaultApp;
+  var ordered = orderApps(apps, cfg);
+  return ordered.length ? ordered[0].id : null;
+}
+function appById(apps, id) {
+  for (var i = 0; i < apps.length; i++) if (apps[i].id === id) return apps[i];
+  return null;
+}
+
+/* ================================================================
+   ICONS — inline SVG, trusted document-local constants only
+   ================================================================ */
+var SVGNS = "http://www.w3.org/2000/svg";
+function buildIcon(appId, iconStyle) {
+  var meta = REGISTRY[appId] || GENERIC;
+  var svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  var title = document.createElementNS(SVGNS, "title");
+  title.textContent = "placeholder icon";
+  svg.appendChild(title);
+  var shape;
+  if (iconStyle === "circle") {
+    shape = document.createElementNS(SVGNS, "circle");
+    shape.setAttribute("cx", "12"); shape.setAttribute("cy", "12"); shape.setAttribute("r", "11");
+  } else {
+    shape = document.createElementNS(SVGNS, "rect");
+    shape.setAttribute("x", "1"); shape.setAttribute("y", "1");
+    shape.setAttribute("width", "22"); shape.setAttribute("height", "22");
+    shape.setAttribute("rx", "6");
+  }
+  shape.setAttribute("fill", meta.color);
+  svg.appendChild(shape);
+  var t = document.createElementNS(SVGNS, "text");
+  t.setAttribute("x", "12"); t.setAttribute("y", "16");
+  t.setAttribute("text-anchor", "middle");
+  t.setAttribute("font-size", "10"); t.setAttribute("font-weight", "800");
+  t.setAttribute("fill", "#ffffff");
+  t.setAttribute("font-family", "-apple-system,Segoe UI,Roboto,sans-serif");
+  t.textContent = meta.glyph; /* trusted constant */
+  svg.appendChild(t);
+  return svg;
+}
+function displayName(app) {
+  /* Known ids use registry display names; unknown apps use the DEVICE-REPORTED name,
+     which is untrusted — only ever assigned via textContent. */
+  return REGISTRY[app.id] ? REGISTRY[app.id].name : String(app.name || GENERIC.name);
+}
+
+/* ================================================================
+   PAYBAR RENDER (contract §d markup, built with DOM APIs;
+   all names via textContent — never innerHTML)
+   ================================================================ */
+var paybarEl = document.getElementById("paybar");
+function el(tag, cls) { var n = document.createElement(tag); if (cls) n.className = cls; return n; }
+
+function buildPaybar() {
+  current = computeCheckout();
+  state.drawerOpen = false;
+  paybarEl.textContent = "";
+
+  var row = el("div", "tz-paybar-row");
+
+  var showBar = current.mode === "toggle" || current.mode === "badge";
+  if (showBar) {
+    var toggle = el("button", "tz-paybar-toggle");
+    toggle.type = "button";
+    toggle.setAttribute("aria-haspopup", "listbox");
+    toggle.setAttribute("aria-expanded", "false");
+
+    var label = el("span", "tz-paybar-toggle-label");
+    /* fixed baked token {{checkout_pay_using}} — never selected via config (CONTRACT §a) */
+    label.textContent = STRINGS.checkout_pay_using;
+    toggle.appendChild(label);
+
+    var main = el("span", "tz-paybar-toggle-main");
+    var iconWrap = el("span", "tz-paybar-app-icon");
+    var nameEl = el("span", "tz-paybar-app-name");
+    var chevron = el("span", "tz-paybar-chevron");
+    chevron.setAttribute("aria-hidden", "true");
+    main.appendChild(iconWrap); main.appendChild(nameEl); main.appendChild(chevron);
+    toggle.appendChild(main);
+
+    if (current.mode === "badge") {
+      iconWrap.appendChild(buildIcon("__generic__", current.cfg.iconStyle));
+      nameEl.textContent = GENERIC.name;
+      chevron.hidden = true;
+      toggle.disabled = true;
+    } else {
+      var selId = resolveSelected(current.apps, current.cfg);
+      state.selectedAppId = selId;
+      var selApp = appById(current.apps, selId);
+      iconWrap.appendChild(buildIcon(selId, current.cfg.iconStyle));
+      nameEl.textContent = selApp ? displayName(selApp) : GENERIC.name;
+      if (current.apps.length <= 1) {
+        chevron.hidden = true;           /* single app: no drawer, chevron hidden */
+        toggle.disabled = true;
+      } else {
+        toggle.addEventListener("click", function () { setDrawer(!state.drawerOpen); });
+      }
+    }
+    row.appendChild(toggle);
+  } else if (current.mode === "silent") {
+    /* plain CTA visuals; paymentApp still resolved + attached silently */
+    state.selectedAppId = resolveSelected(current.apps, current.cfg);
+  } else {
+    state.selectedAppId = null;
+  }
+
+  /* CTA — unchanged skeleton contract: class cta + data-tranzmit-action + data-product-id */
+  var cta = el("button", "cta");
+  cta.setAttribute("data-tranzmit-action", "cta");
+  cta.setAttribute("data-product-id", PRODUCT_ID);
+  var ctaLabel = el("span", "cta-label"); ctaLabel.textContent = STRINGS.cta_label;
+  var arrow = el("span", "arrow"); arrow.textContent = "→";
+  cta.appendChild(ctaLabel); cta.appendChild(arrow);
+  row.appendChild(cta);
+  paybarEl.appendChild(row);
+
+  /* scrim + drawer (only interactive in toggle mode with >1 app) */
+  if (current.mode === "toggle" && current.apps.length > 1) {
+    var scrim = el("div", "tz-paybar-scrim");
+    scrim.addEventListener("click", function () { setDrawer(false); });
+    paybarEl.appendChild(scrim);
+
+    var drawer = el("div", "tz-paybar-drawer");
+    drawer.setAttribute("role", "listbox");
+    var title = el("div", "tz-paybar-drawer-title");
+    title.textContent = STRINGS.checkout_choose_app;
+    drawer.appendChild(title);
+
+    var appsWrap = el("div", "tz-paybar-apps");
+    /* maxVisibleApps — IDENTICAL rule to the SDK sanitizer (CONTRACT §a, one rule in
+       both layers): not a finite integer ≥ 1 → default 5; else clamp to 1..12. */
+    var mvRaw = current.cfg.maxVisibleApps;
+    var maxRows = (typeof mvRaw === "number" && isFinite(mvRaw) &&
+                   Math.floor(mvRaw) === mvRaw && mvRaw >= 1)
+      ? Math.min(Math.max(mvRaw, 1), 12) : 5;
+    var ordered = orderApps(current.apps, current.cfg);
+    if (ordered.length > maxRows) {
+      /* cap at maxVisibleApps rows + half-row peek so scrollability is discoverable */
+      appsWrap.style.maxHeight = (maxRows * 48 + 24) + "px";
+    }
+    ordered.forEach(function (app) {
+      var rowBtn = el("button", "tz-paybar-app");
+      rowBtn.type = "button";
+      rowBtn.setAttribute("role", "option");
+      rowBtn.setAttribute("data-app-id", app.id);
+      var ic = el("span", "tz-paybar-app-icon");
+      ic.appendChild(buildIcon(app.id, current.cfg.iconStyle));
+      var nm = el("span", "tz-paybar-app-name");
+      nm.textContent = displayName(app);          /* UNTRUSTED for unknown apps: textContent only */
+      nm.title = displayName(app);
+      var radio = el("span", "tz-paybar-app-radio");
+      radio.setAttribute("aria-hidden", "true");
+      rowBtn.appendChild(ic); rowBtn.appendChild(nm); rowBtn.appendChild(radio);
+      rowBtn.addEventListener("click", function () { selectApp(app.id); });
+      appsWrap.appendChild(rowBtn);
+    });
+    drawer.appendChild(appsWrap);
+    paybarEl.appendChild(drawer);
+    refreshSelection();
+  }
+}
+
+function refreshSelection() {
+  var rows = paybarEl.querySelectorAll(".tz-paybar-app");
+  Array.prototype.forEach.call(rows, function (r) {
+    var on = r.getAttribute("data-app-id") === state.selectedAppId;
+    r.classList.toggle("is-selected", on);
+    r.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function setDrawer(open) {
+  var wasOpen = state.drawerOpen;
+  state.drawerOpen = open;
+  var drawer = paybarEl.querySelector(".tz-paybar-drawer");
+  var scrim = paybarEl.querySelector(".tz-paybar-scrim");
+  var toggle = paybarEl.querySelector(".tz-paybar-toggle");
+  if (drawer) drawer.classList.toggle("is-open", open);
+  if (scrim) scrim.classList.toggle("is-open", open);
+  if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  /* a11y focus management: open → focus the selected app row; close → return to toggle */
+  if (open && drawer) {
+    var sel = drawer.querySelector(".tz-paybar-app.is-selected") ||
+              drawer.querySelector(".tz-paybar-app");
+    if (sel) sel.focus();
+  } else if (!open && wasOpen && toggle) {
+    toggle.focus();
+  }
+}
+
+function selectApp(id) {
+  state.selectedAppId = id;
+  refreshSelection();
+  /* selector analytics — contract §c custom_action convention (fires on every tap,
+     including re-selecting the current app) */
+  window.Tranzmit.customAction("checkout_app_selected", { app: id });
+  setDrawer(false);
+  /* update collapsed toggle */
+  var toggle = paybarEl.querySelector(".tz-paybar-toggle");
+  if (toggle) {
+    var iconWrap = toggle.querySelector(".tz-paybar-app-icon");
+    var nameEl = toggle.querySelector(".tz-paybar-app-name");
+    var app = appById(current.apps, id);
+    iconWrap.textContent = "";
+    iconWrap.appendChild(buildIcon(id, current.cfg.iconStyle));
+    nameEl.textContent = app ? displayName(app) : GENERIC.name;
+  }
+}
+
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && state.drawerOpen) setDrawer(false);
+});
+
+/* ================================================================
+   CTA CLICK PATH — mirrors the contract's two-listener interplay:
+   1) paybar interceptor (registered FIRST, like document ${js}
+      running before the bridge IIFE): if active, attach paymentApp
+      and stopImmediatePropagation.
+   2) mock of the SDK bridge's declarative capture listener:
+      data-tranzmit-action walk-up, plain cta (today's behavior).
+   ================================================================ */
+document.addEventListener("click", function (ev) {
+  var cta = ev.target.closest ? ev.target.closest("#phone .cta") : null;
+  if (!cta) return;
+  var routed = (current.mode === "toggle" || current.mode === "silent") && state.selectedAppId;
+  if (routed) {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    /* EXPLICIT contract decision: a CTA tap while the drawer is open CLOSES the
+       drawer AND fires cta with the currently selected app (the bar stays above
+       the scrim precisely so the CTA remains live during selection). */
+    if (state.drawerOpen) setDrawer(false);
+    window.Tranzmit.post({
+      type: "cta",
+      productId: cta.getAttribute("data-product-id"),
+      paymentApp: state.selectedAppId
+    });
+  }
+  /* not routed → fall through to the bridge's declarative listener below */
+}, true);
+
+document.addEventListener("click", function (ev) {
+  /* mock of compose.ts's injected declarative path */
+  var node = ev.target;
+  while (node && node !== document) {
+    var action = node.getAttribute && node.getAttribute("data-tranzmit-action");
+    if (action) {
+      ev.preventDefault();
+      window.Tranzmit.post({
+        type: action === "cta" ? "cta" : action,
+        productId: node.getAttribute("data-product-id") || undefined
+      });
+      return;
+    }
+    node = node.parentNode;
+  }
+}, true);
+
+/* ================================================================
+   HARNESS: scenario / skin / device wiring
+   ================================================================ */
+var tpl = document.getElementById("tpl");
+var cfgView = document.getElementById("cfgView");
+
+function applyScenario(key, silent) {
+  state.scenario = key;
+  state.selectedAppId = null;
+  var sc = null;
+  SCENARIOS.forEach(function (s) { if (s.key === key) sc = s; });
+  /* mock the SDK injection (real SDK: a script tag assigning window.TranzmitCheckout,
+     inserted after window.TranzmitUser in compose.ts — see CONTRACT.md section b) */
+  if (sc.checkout === undefined) { try { delete window.TranzmitCheckout; } catch (_) { window.TranzmitCheckout = undefined; } }
+  else window.TranzmitCheckout = JSON.parse(JSON.stringify(sc.checkout));
+  cfgView.textContent = (window.TranzmitCheckout === undefined)
+    ? "undefined   (old SDK — global never injected)"
+    : JSON.stringify(window.TranzmitCheckout, null, 2);
+  buildPaybar();
+  if (!silent) logNote("scenario → " + sc.title + (current.reason ? "  [" + current.reason + " → " + current.mode + "]" : "  [mode: " + current.mode + "]"));
+  markButtons();
+}
+
+function applySkin(skin) {
+  state.skin = skin;
+  tpl.classList.remove("skin-ember", "skin-indigo");
+  tpl.classList.add("skin-" + skin);
+  markButtons();
+}
+
+function applyDevice(key) {
+  state.device = key;
+  var d = DEVICES[key];
+  var phone = document.getElementById("phone");
+  var outer = document.getElementById("phoneOuter");
+  var scale = Math.min(1, 660 / d.h);
+  /* +20 = 10px bezel each side (box-sizing:border-box) so the SCREEN is exactly d.w × d.h */
+  phone.style.width = (d.w + 20) + "px";
+  phone.style.height = (d.h + 20) + "px";
+  phone.style.transform = "scale(" + scale + ")";
+  outer.style.width = ((d.w + 20) * scale) + "px";
+  outer.style.height = ((d.h + 20) * scale) + "px";
+  /* mock the compose-time :root injection of --tz-* variables */
+  tpl.style.setProperty("--tz-vw", d.w + "px");
+  tpl.style.setProperty("--tz-vh", d.h + "px");
+  tpl.style.setProperty("--tz-safe-top", d.st + "px");
+  tpl.style.setProperty("--tz-safe-bottom", d.sb + "px");
+  tpl.style.setProperty("--tz-safe-left", "0px");
+  tpl.style.setProperty("--tz-safe-right", "0px");
+  /* two independent breakpoints (see CSS): compact toggle vs dismiss-corner reserve */
+  tpl.classList.toggle("tz-compact", d.w <= 359);
+  tpl.classList.toggle("tz-reserve", d.w <= 380);
+  setDrawer(false); /* width switch must not carry an open drawer across frames */
+  document.getElementById("statusbar").style.height = d.st + "px";
+  document.getElementById("homeInd").style.display = d.sb > 0 ? "block" : "none";
+  document.getElementById("dismissX").style.top = (d.st + 6) + "px";
+  document.getElementById("devLabel").textContent = d.label;
+  markButtons();
+}
+
+var scenarioBtnsEl = document.getElementById("scenarioBtns");
+SCENARIOS.forEach(function (s) {
+  var b = document.createElement("button");
+  b.textContent = s.title;
+  b.setAttribute("data-scenario", s.key);
+  b.addEventListener("click", function () { applyScenario(s.key); });
+  scenarioBtnsEl.appendChild(b);
+});
+document.querySelectorAll("#skinBtns button").forEach(function (b) {
+  b.addEventListener("click", function () { applySkin(b.getAttribute("data-skin")); });
+});
+document.querySelectorAll("#deviceBtns button").forEach(function (b) {
+  b.addEventListener("click", function () { applyDevice(b.getAttribute("data-dev")); });
+});
+function markButtons() {
+  document.querySelectorAll("#scenarioBtns button").forEach(function (b) {
+    b.classList.toggle("on", b.getAttribute("data-scenario") === state.scenario);
+  });
+  document.querySelectorAll("#skinBtns button").forEach(function (b) {
+    b.classList.toggle("on", b.getAttribute("data-skin") === state.skin);
+  });
+  document.querySelectorAll("#deviceBtns button").forEach(function (b) {
+    b.classList.toggle("on", b.getAttribute("data-dev") === state.device);
+  });
+}
+
+document.getElementById("dismissX").addEventListener("click", function () {
+  logNote("native dismiss × tapped — handled by SDK chrome (ModalPresenter), outside the document/bridge");
+});
+
+/* boot */
+applyDevice("390");
+applySkin("ember");
+applyScenario("default4", true);
+window.addEventListener("load", function () {
+  window.Tranzmit.post({ type: "ready" }); /* bridge posts ready on load */
+});
+</script>
+</body>
+</html>

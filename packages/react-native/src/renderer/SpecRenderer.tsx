@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Linking, PixelRatio, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
+import { Linking, PixelRatio, Platform, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import WebView, { type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
 import { verifyDocumentIntegrity, type PaywallSpec, type ProductSpec } from "@tranzmit/shared";
+import { sanitizeCheckoutUi, type CheckoutContext, type ResolvedCheckoutApp } from "../checkout.js";
 import type { PaywallUserContext, PresentationMode } from "../types.js";
 import { defaultProduct, renderDocument, type PaywallViewportContract } from "./compose.js";
 
@@ -19,10 +20,13 @@ export interface SpecRendererProps {
   presentation?: PresentationMode;
   user?: PaywallUserContext;
   locale?: string;
-  onCTA: (product: ProductSpec) => void;
+  /** Sanitized upstream by the provider (sanitizeCheckoutApps). */
+  checkoutApps?: ResolvedCheckoutApp[];
+  onCTA: (product: ProductSpec, checkout?: CheckoutContext) => void;
   onDismiss: () => void;
   onError?: (error: Error) => void;
   onReady?: () => void;
+  onCheckoutAppSelected?: (appId: string) => void;
 }
 
 export function SpecRenderer({
@@ -30,10 +34,12 @@ export function SpecRenderer({
   presentation = "sheet",
   user,
   locale,
+  checkoutApps,
   onCTA,
   onDismiss,
   onError,
   onReady,
+  onCheckoutAppSelected,
 }: SpecRendererProps) {
   const windowSize = useWindowDimensions();
   const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0, bottom: 0, left: 0, right: 0 };
@@ -44,11 +50,13 @@ export function SpecRenderer({
   );
   const validationError = useMemo(() => validateRenderableSpec(spec), [spec]);
   const html = useMemo(
-    () => validationError ? "" : composeDocument(spec, presentation, viewport, user, locale),
-    [locale, presentation, spec, user, validationError, viewport]
+    () => validationError ? "" : composeDocument(spec, presentation, viewport, user, locale, checkoutApps),
+    [checkoutApps, locale, presentation, spec, user, validationError, viewport]
   );
   const readyKeyRef = useRef(html);
   const readyFiredRef = useRef(false);
+  const lastCtaAtRef = useRef(0);
+  const lastCheckoutSelectAtRef = useRef(0);
 
   useEffect(() => {
     if (validationError) onError?.(validationError);
@@ -88,13 +96,37 @@ export function SpecRenderer({
     }
 
     if (type === "cta" || type === "cta_click") {
+      // A pay-bar document with a late-registered CTA interceptor can post the
+      // same tap through both its own handler and the declarative bridge path;
+      // drop the duplicate.
+      const now = Date.now();
+      if (now - lastCtaAtRef.current < 500) return;
       const product = productFromMessage(spec, message) || defaultProduct(spec);
-      if (product) onCTA(product);
+      if (!product) return;
+      lastCtaAtRef.current = now;
+      const context = checkoutContextFromMessage(spec, message, checkoutApps);
+      // Keep the legacy one-argument call when the spec has no checkout block.
+      if (context) onCTA(product, context);
+      else onCTA(product);
       return;
     }
 
     if (type === "dismiss") {
       onDismiss();
+      return;
+    }
+
+    if (type === "custom_action") {
+      if (message.name === "checkout_app_selected" && onCheckoutAppSelected) {
+        const now = Date.now();
+        if (now - lastCheckoutSelectAtRef.current < 250) return;
+        const payload = isPlainObject(message.payload) ? message.payload : {};
+        const app = payload.app;
+        if (typeof app === "string" && CHECKOUT_APP_ID_PATTERN.test(app)) {
+          lastCheckoutSelectAtRef.current = now;
+          onCheckoutAppSelected(app);
+        }
+      }
       return;
     }
 
@@ -185,6 +217,39 @@ function stringValue(value: unknown) {
 function heightForPresentation(presentation: PresentationMode) {
   if (presentation === "inline") return 560;
   return "100%";
+}
+
+const CHECKOUT_APP_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+// The injected checkout runtime. Empty when checkout is absent or disabled so
+// the installed-financial-apps list never enters a document that cannot use it.
+// packageName is never injected; the document echoes an id back and the SDK
+// resolves it against the natively-held list.
+function checkoutRuntime(spec: PaywallSpec, checkoutApps?: ResolvedCheckoutApp[]): object {
+  if (!spec.checkout) return {};
+  const config = sanitizeCheckoutUi(spec.checkout.ui);
+  if (!config.enabled) return {};
+  return {
+    upiApps: (checkoutApps || []).map((app) => ({ id: app.id, name: app.name })),
+    platform: Platform.OS,
+    config,
+  };
+}
+
+function checkoutContextFromMessage(
+  spec: PaywallSpec,
+  message: Record<string, unknown>,
+  checkoutApps?: ResolvedCheckoutApp[],
+): CheckoutContext | undefined {
+  if (!spec.checkout) return undefined;
+  const ui = sanitizeCheckoutUi(spec.checkout.ui);
+  const appId = message.paymentApp;
+  // enabled=false strips paymentApp even when a stale/cached document still
+  // posts one (defense in depth alongside the empty injected runtime).
+  const paymentApp = ui.enabled && typeof appId === "string" && CHECKOUT_APP_ID_PATTERN.test(appId)
+    ? checkoutApps?.find((app) => app.id === appId)
+    : undefined;
+  return { paymentApp, provider: spec.checkout.provider };
 }
 
 function productFromMessage(spec: PaywallSpec, message: Record<string, unknown>) {
@@ -282,8 +347,9 @@ export function composeDocumentForTest(
   viewport?: PaywallViewportContract,
   user?: PaywallUserContext,
   locale?: string,
+  checkoutApps?: ResolvedCheckoutApp[],
 ) {
-  return composeDocument(spec, presentation, viewport, user, locale);
+  return composeDocument(spec, presentation, viewport, user, locale, checkoutApps);
 }
 
 function composeDocument(
@@ -292,9 +358,10 @@ function composeDocument(
   viewport?: PaywallViewportContract,
   user?: PaywallUserContext,
   locale?: string,
+  checkoutApps?: ResolvedCheckoutApp[],
 ) {
   const resolvedViewport = viewport || fallbackViewport(presentation);
-  return renderDocument(spec, presentation, resolvedViewport, user, locale);
+  return renderDocument(spec, presentation, resolvedViewport, user, locale, undefined, checkoutRuntime(spec, checkoutApps));
 }
 
 function viewportFromNativeLayout(

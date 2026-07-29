@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTranzmitClient, type SharedClient, type TranzmitIdentity } from "@tranzmit/shared";
 import { reactNativeAdapter, reactNativeMetadata } from "./adapter.js";
+import { checkoutAnalyticsAppId, sanitizeCheckoutApps } from "./checkout.js";
 import { PaywallHost } from "./PaywallHost.js";
 import { TranzmitContext } from "./TranzmitContext.js";
 import type {
@@ -28,6 +29,7 @@ export function TranzmitProvider({
   apiBaseUrl,
   fallbackApiBaseUrls,
   locale,
+  checkoutApps,
   onError,
   debug,
   children,
@@ -50,6 +52,11 @@ export function TranzmitProvider({
   if (!clientRef.current) {
     clientRef.current = createTranzmitClient(reactNativeAdapter, reactNativeMetadata);
   }
+
+  const sanitizedCheckoutApps = useMemo(
+    () => (checkoutApps ? sanitizeCheckoutApps(checkoutApps) : undefined),
+    [checkoutApps],
+  );
 
   const syncPreloadedState = useCallback(() => {
     setPreloadedPaywalls(Array.from(preloadedRef.current.values()));
@@ -379,6 +386,7 @@ export function TranzmitProvider({
     ready: isReady,
     user: userContext,
     locale,
+    checkoutApps: sanitizedCheckoutApps,
     gate,
     preloadPlacement,
     track,
@@ -387,7 +395,7 @@ export function TranzmitProvider({
     setTraits,
     flush: () => clientRef.current?.flush() || Promise.resolve(),
     getPlacement: (trigger) => clientRef.current?.getPlacement(trigger) || null,
-  }), [configVersion, gate, isReady, locale, preloadPlacement, refreshConfig, reportConversion, setTraits, track, userContext]);
+  }), [configVersion, gate, isReady, locale, preloadPlacement, refreshConfig, reportConversion, sanitizedCheckoutApps, setTraits, track, userContext]);
 
   return (
     <TranzmitContext.Provider value={value}>
@@ -397,13 +405,26 @@ export function TranzmitProvider({
         preloadedPaywalls={preloadedPaywalls}
         user={userContext}
         locale={locale}
-        onCTA={(active, product) => {
+        checkoutApps={sanitizedCheckoutApps}
+        onCTA={(active, product, checkout) => {
           clientRef.current?.track("cta_click", {
             ...attribution(active.trigger, active.placement),
             productId: product.id,
+            ...(checkout?.paymentApp ? { payment_app: checkout.paymentApp.id } : {}),
           });
-          dismissPaywall(active.id, false);
-          active.options.onCTA?.(product);
+          // dismissOnCTA=false keeps the paywall up (a failed UPI mandate must
+          // not strand the user); the host dismisses via the gate result.
+          if (active.options.dismissOnCTA !== false) {
+            dismissPaywall(active.id, false);
+          }
+          if (checkout) active.options.onCTA?.(product, checkout);
+          else active.options.onCTA?.(product);
+        }}
+        onCheckoutAppSelected={(active, appId) => {
+          clientRef.current?.track("checkout_app_selected", {
+            ...attribution(active.trigger, active.placement),
+            app: checkoutAnalyticsAppId(appId),
+          });
         }}
         onDismiss={(active) => dismissPaywall(active.id, true)}
         onError={handlePaywallError}

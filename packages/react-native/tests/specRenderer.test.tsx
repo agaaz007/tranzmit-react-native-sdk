@@ -494,3 +494,245 @@ describe("SpecRenderer", () => {
     expect(isPhoneArtboard('<div class="card"><div class="row"></div></div>')).toBe(false);
   });
 });
+
+describe("SpecRenderer checkout", () => {
+  const gpay = { id: "gpay", name: "Google Pay", packageName: "com.google.android.apps.nbu.paisa.user" };
+
+  const checkoutSpec = {
+    ...baseSpec,
+    checkout: { provider: { orderToken: "tok_upi_1" } },
+    document: {
+      html: `
+        <main class="paywall">
+          <button data-tranzmit-action="cta" data-product-id="pro_monthly" data-payment-app="gpay">Pay With App</button>
+        </main>
+      `,
+    },
+  };
+
+  it("injects the checkout runtime with the \\u003c escaping pattern", () => {
+    const html = composeDocumentForTest(
+      { ...baseSpec, checkout: {} },
+      "inline",
+      undefined,
+      undefined,
+      undefined,
+      [{ id: "com.example.upi", name: "Big <Deal> Pay", packageName: "com.example.upi" }],
+    );
+
+    expect(html).toContain("window.TranzmitCheckout = ");
+    expect(html).toContain('"name":"Big \\u003cDeal> Pay"');
+    expect(html).not.toContain('"name":"Big <Deal> Pay"');
+    expect(html).toContain('"platform":"ios"');
+    expect(html).toContain('"config":{"enabled":true');
+    expect(html).toContain("checkout: window.TranzmitCheckout || {}");
+  });
+
+  it("injects an empty checkout runtime when spec.checkout is absent", () => {
+    const html = composeDocumentForTest(baseSpec, "inline", undefined, undefined, undefined, [gpay]);
+    expect(html).toContain("window.TranzmitCheckout = {};");
+    expect(html).not.toContain("upiApps");
+  });
+
+  it("injects an empty checkout runtime when ui.enabled is false", () => {
+    const html = composeDocumentForTest(
+      { ...baseSpec, checkout: { ui: { enabled: false } } },
+      "inline",
+      undefined,
+      undefined,
+      undefined,
+      [gpay],
+    );
+    expect(html).toContain("window.TranzmitCheckout = {};");
+    expect(html).not.toContain("upiApps");
+    expect(html).not.toContain("Google Pay");
+  });
+
+  it("never injects packageName into the WebView", () => {
+    const html = composeDocumentForTest(
+      { ...baseSpec, checkout: {} },
+      "inline",
+      undefined,
+      undefined,
+      undefined,
+      [gpay],
+    );
+    expect(html).toContain('"upiApps":[{"id":"gpay","name":"Google Pay"}]');
+    expect(html).not.toContain('"packageName"');
+    expect(html).not.toContain("com.google.android.apps.nbu.paisa.user");
+  });
+
+  it("delivers a resolved CheckoutContext as the second onCTA argument", () => {
+    const onCTA = vi.fn();
+    const { getByText } = render(
+      <SpecRenderer spec={checkoutSpec} presentation="inline" checkoutApps={[gpay]} onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Pay With App"));
+
+    expect(onCTA).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pro_monthly" }),
+      {
+        paymentApp: { id: "gpay", name: "Google Pay", packageName: "com.google.android.apps.nbu.paisa.user" },
+        provider: { orderToken: "tok_upi_1" },
+      },
+    );
+  });
+
+  it("leaves paymentApp undefined for an unknown app id", () => {
+    const onCTA = vi.fn();
+    const spec = {
+      ...checkoutSpec,
+      document: {
+        html: '<main class="paywall"><button data-tranzmit-action="cta" data-product-id="pro_monthly" data-payment-app="phonepe">Pay Unknown</button></main>',
+      },
+    };
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" checkoutApps={[gpay]} onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Pay Unknown"));
+
+    expect(onCTA).toHaveBeenCalledTimes(1);
+    expect(onCTA.mock.calls[0][1]).toEqual({ provider: { orderToken: "tok_upi_1" } });
+    expect(onCTA.mock.calls[0][1].paymentApp).toBeUndefined();
+  });
+
+  it("rejects paymentApp ids that violate the charset", () => {
+    const onCTA = vi.fn();
+    const spec = {
+      ...checkoutSpec,
+      document: {
+        html: '<main class="paywall"><button data-tranzmit-action="cta" data-product-id="pro_monthly" data-payment-app="bad app!">Pay Bad</button></main>',
+      },
+    };
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" checkoutApps={[gpay]} onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Pay Bad"));
+
+    expect(onCTA.mock.calls[0][1].paymentApp).toBeUndefined();
+  });
+
+  it("strips paymentApp from cta messages when ui.enabled is false", () => {
+    const onCTA = vi.fn();
+    const spec = {
+      ...checkoutSpec,
+      checkout: { ...checkoutSpec.checkout, ui: { enabled: false } },
+    };
+    const { getByText } = render(
+      <SpecRenderer spec={spec} presentation="inline" checkoutApps={[gpay]} onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Pay With App"));
+
+    expect(onCTA).toHaveBeenCalledTimes(1);
+    expect(onCTA.mock.calls[0][1].paymentApp).toBeUndefined();
+    expect(onCTA.mock.calls[0][1].provider).toEqual({ orderToken: "tok_upi_1" });
+  });
+
+  it("passes undefined as the second onCTA argument when spec.checkout is absent", () => {
+    const onCTA = vi.fn();
+    const { getByText } = render(
+      <SpecRenderer spec={baseSpec} presentation="inline" checkoutApps={[gpay]} onCTA={onCTA} onDismiss={() => {}} />
+    );
+
+    fireEvent.click(getByText("Start Free Trial"));
+
+    expect(onCTA).toHaveBeenCalledTimes(1);
+    expect(onCTA.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("ignores a second cta message arriving within 500ms", () => {
+    vi.useFakeTimers();
+    try {
+      const onCTA = vi.fn();
+      const { getByText } = render(
+        <SpecRenderer spec={baseSpec} presentation="inline" onCTA={onCTA} onDismiss={() => {}} />
+      );
+
+      fireEvent.click(getByText("Start Free Trial"));
+      fireEvent.click(getByText("Start Free Trial"));
+      expect(onCTA).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(600);
+      fireEvent.click(getByText("Start Free Trial"));
+      expect(onCTA).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dispatches checkout_app_selected for a valid app id and drops bad charsets", () => {
+    const onCheckoutAppSelected = vi.fn();
+    const spec = {
+      ...checkoutSpec,
+      bridge: { version: 1 as const },
+      document: {
+        html: `
+          <main class="paywall">
+            <button data-tranzmit-action="custom_action" data-action-name="checkout_app_selected" data-payload-app="bad app!">Pick Bad</button>
+            <button data-tranzmit-action="custom_action" data-action-name="checkout_app_selected" data-payload-app="gpay">Pick GPay</button>
+            <button data-tranzmit-action="custom_action" data-action-name="unrelated_action" data-payload-app="gpay">Unrelated</button>
+          </main>
+        `,
+      },
+    };
+    const { getByText } = render(
+      <SpecRenderer
+        spec={spec}
+        presentation="inline"
+        checkoutApps={[gpay]}
+        onCTA={() => {}}
+        onDismiss={() => {}}
+        onCheckoutAppSelected={onCheckoutAppSelected}
+      />
+    );
+
+    fireEvent.click(getByText("Pick Bad"));
+    expect(onCheckoutAppSelected).not.toHaveBeenCalled();
+
+    fireEvent.click(getByText("Pick GPay"));
+    expect(onCheckoutAppSelected).toHaveBeenCalledTimes(1);
+    expect(onCheckoutAppSelected).toHaveBeenCalledWith("gpay");
+
+    // Other custom_action names stay no-ops.
+    fireEvent.click(getByText("Unrelated"));
+    expect(onCheckoutAppSelected).toHaveBeenCalledTimes(1);
+  });
+
+  it("rate-limits checkout_app_selected events closer than 250ms", () => {
+    vi.useFakeTimers();
+    try {
+      const onCheckoutAppSelected = vi.fn();
+      const spec = {
+        ...checkoutSpec,
+        bridge: { version: 1 as const },
+        document: {
+          html: '<main class="paywall"><button data-tranzmit-action="custom_action" data-action-name="checkout_app_selected" data-payload-app="gpay">Pick GPay</button></main>',
+        },
+      };
+      const { getByText } = render(
+        <SpecRenderer
+          spec={spec}
+          presentation="inline"
+          checkoutApps={[gpay]}
+          onCTA={() => {}}
+          onDismiss={() => {}}
+          onCheckoutAppSelected={onCheckoutAppSelected}
+        />
+      );
+
+      fireEvent.click(getByText("Pick GPay"));
+      fireEvent.click(getByText("Pick GPay"));
+      expect(onCheckoutAppSelected).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(300);
+      fireEvent.click(getByText("Pick GPay"));
+      expect(onCheckoutAppSelected).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -1,8 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { TranzmitPaywall, TranzmitProvider } from "../src/index.js";
+import { TranzmitPaywall, TranzmitProvider, useTranzmit } from "../src/index.js";
 import { baseSpec, mockConfig } from "./fixtures.js";
+
+const checkoutSpec = {
+  ...baseSpec,
+  bridge: { version: 1 as const },
+  checkout: { provider: { orderToken: "tok_upi_1" } },
+  document: {
+    html: `
+      <main class="paywall">
+        <h1>Unlock Pro</h1>
+        <button data-tranzmit-action="cta" data-product-id="pro_monthly" data-payment-app="gpay">Pay With App</button>
+        <button data-tranzmit-action="custom_action" data-action-name="checkout_app_selected" data-payload-app="com.example.upi">Pick Other</button>
+      </main>
+    `,
+  },
+};
+
+const installedApps = [
+  { packageName: "com.google.android.apps.nbu.paisa.user" },
+  { packageName: "com.example.upi", name: "Example UPI" },
+];
+
+function TranzmitValueProbe({ onValue }: { onValue: (value: any) => void }) {
+  const value = useTranzmit();
+  onValue(value);
+  return null;
+}
 
 describe("TranzmitPaywall", () => {
   beforeEach(() => {
@@ -91,4 +117,66 @@ describe("TranzmitPaywall", () => {
     fireEvent.click(getByText("Choose Dynamic Plan").closest("button")!);
     expect(onCTA).toHaveBeenCalledWith(expect.objectContaining({ id: "pro_monthly" }));
   });
+
+  it("threads checkout context to onCTA and tracks payment_app on cta_click", async () => {
+    const onCTA = vi.fn();
+    let tranzmit: any;
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" checkoutApps={installedApps}>
+        <TranzmitValueProbe onValue={(value) => { tranzmit = value; }} />
+        <TranzmitPaywall
+          spec={checkoutSpec}
+          variantId="preview"
+          visible
+          presentation="inline"
+          onCTA={onCTA}
+        />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Pay With App")).toBeTruthy());
+    fireEvent.click(getByText("Pay With App").closest("button")!);
+
+    expect(onCTA).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pro_monthly" }),
+      {
+        paymentApp: { id: "gpay", name: "Google Pay", packageName: "com.google.android.apps.nbu.paisa.user" },
+        provider: { orderToken: "tok_upi_1" },
+      },
+    );
+
+    await tranzmit.flush();
+    const ctaClicks = flushedEvents().filter((event) => event.event === "cta_click");
+    expect(ctaClicks).toHaveLength(1);
+    expect(ctaClicks[0].properties.payment_app).toBe("gpay");
+    expect(ctaClicks[0].properties.trigger).toBe("dynamic_spec");
+  });
+
+  it("tracks checkout_app_selected as other for unknown app ids", async () => {
+    let tranzmit: any;
+    const { getByText } = render(
+      <TranzmitProvider publicKey="pk_test_demo" checkoutApps={installedApps}>
+        <TranzmitValueProbe onValue={(value) => { tranzmit = value; }} />
+        <TranzmitPaywall spec={checkoutSpec} variantId="preview" visible presentation="inline" />
+      </TranzmitProvider>
+    );
+
+    await waitFor(() => expect(getByText("Pick Other")).toBeTruthy());
+    fireEvent.click(getByText("Pick Other").closest("button")!);
+
+    await tranzmit.flush();
+    const selections = flushedEvents().filter((event) => event.event === "checkout_app_selected");
+    expect(selections).toHaveLength(1);
+    expect(selections[0].properties.app).toBe("other");
+    expect(selections[0].properties.trigger).toBe("dynamic_spec");
+  });
 });
+
+function flushedEvents() {
+  return vi.mocked(fetch).mock.calls
+    .filter(([url]) => String(url).includes("/v1/events"))
+    .flatMap(([, init]) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return body.events || [];
+    });
+}
