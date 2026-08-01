@@ -1,5 +1,6 @@
 import type { ProductSpec } from "@tranzmit/shared";
 import { Pressable, Text, View } from "react-native";
+import type { CheckoutContext, ResolvedCheckoutApp } from "./checkout.js";
 import { SpecRenderer } from "./renderer/SpecRenderer.js";
 import { ModalPresenter } from "./presentation/ModalPresenter.js";
 import { SheetPresenter } from "./presentation/SheetPresenter.js";
@@ -19,11 +20,13 @@ export interface PaywallHostProps {
   preloadedPaywalls?: PreloadedPaywall[];
   user?: PaywallUserContext;
   locale?: string;
-  onCTA: (active: ActivePaywall, product: ProductSpec) => void;
+  checkoutApps?: ResolvedCheckoutApp[];
+  onCTA: (active: ActivePaywall, product: ProductSpec, checkout?: CheckoutContext) => void;
   onDismiss: (active: ActivePaywall) => void;
   onError: (active: ActivePaywall, error: Error) => void;
   onPreloadReady?: (preload: PreloadedPaywall) => void;
   onPreloadError?: (preload: PreloadedPaywall, error: Error) => void;
+  onCheckoutAppSelected?: (active: ActivePaywall, appId: string) => void;
 }
 
 export function PaywallHost({
@@ -31,11 +34,13 @@ export function PaywallHost({
   preloadedPaywalls = [],
   user,
   locale,
+  checkoutApps,
   onCTA,
   onDismiss,
   onError,
   onPreloadReady,
   onPreloadError,
+  onCheckoutAppSelected,
 }: PaywallHostProps) {
   const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0, bottom: 0, left: 0, right: 0 };
   return (
@@ -73,8 +78,12 @@ export function PaywallHost({
                 spec={preload.placement.spec}
                 user={user}
                 locale={locale}
-                onCTA={(product) => {
-                  if (preload.active) onCTA(preload.active, product);
+                checkoutApps={checkoutApps}
+                onCTA={(product, checkout) => {
+                  if (preload.active) onCTA(preload.active, product, checkout);
+                }}
+                onCheckoutAppSelected={(appId) => {
+                  if (preload.active) onCheckoutAppSelected?.(preload.active, appId);
                 }}
                 onDismiss={() => {
                   if (preload.active) onDismiss(preload.active);
@@ -99,7 +108,9 @@ export function PaywallHost({
             spec={active.placement.spec}
             user={user}
             locale={locale}
-            onCTA={(product) => onCTA(active, product)}
+            checkoutApps={checkoutApps}
+            onCTA={(product, checkout) => onCTA(active, product, checkout)}
+            onCheckoutAppSelected={(appId) => onCheckoutAppSelected?.(active, appId)}
             onDismiss={() => onDismiss(active)}
             onError={(error) => onError(active, error)}
             presentation={active.presentation}
@@ -107,7 +118,7 @@ export function PaywallHost({
         );
 
         if (active.presentation === "inline") {
-          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} locale={locale} onCTA={(product) => onCTA(active, product)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
+          return <SpecRenderer key={active.id} spec={active.placement.spec} user={user} locale={locale} checkoutApps={checkoutApps} onCTA={(product, checkout) => onCTA(active, product, checkout)} onCheckoutAppSelected={(appId) => onCheckoutAppSelected?.(active, appId)} onDismiss={() => onDismiss(active)} onError={(error) => onError(active, error)} presentation="inline" />;
         }
 
         if (active.presentation === "modal") {

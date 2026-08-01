@@ -45,10 +45,15 @@ export default function WebView({
       // conventional .cta / .tz-cta class on a button falls back to a CTA.
       const isCtaClass = /(^|\s)(cta|tz-cta)(\s|$)/.test(classes);
       const action = explicitAction || (isCtaClass ? "cta" : undefined);
+      // data-payment-app / data-payload-app simulate what the pay-bar document
+      // JS attaches via window.Tranzmit.post / customAction at runtime.
       return {
         action,
         productId: attr(attrs, "data-product-id"),
         url: attr(attrs, "href") || attr(attrs, "data-url"),
+        name: attr(attrs, "data-action-name"),
+        paymentApp: attr(attrs, "data-payment-app"),
+        payloadApp: attr(attrs, "data-payload-app"),
         label: stripTags(match[2]),
       };
     })
@@ -68,7 +73,14 @@ export default function WebView({
       {buttons.map((button) => (
         <button
           key={`${button.action}:${button.productId || button.label}`}
-          onClick={() => onMessage?.({ nativeEvent: { data: JSON.stringify({ type: button.action, productId: button.productId, url: button.url }) } })}
+          onClick={() => onMessage?.({ nativeEvent: { data: JSON.stringify({
+            type: button.action,
+            productId: button.productId,
+            url: button.url,
+            name: button.name,
+            paymentApp: button.paymentApp,
+            payload: button.payloadApp ? { app: button.payloadApp } : undefined,
+          }) } })}
         >
           {button.label}
         </button>

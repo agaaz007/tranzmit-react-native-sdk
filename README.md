@@ -328,6 +328,17 @@ Run this QA checklist before shipping:
 12. Call `await refreshConfig()` in QA.
 13. Present the paywall again and confirm the dashboard change appears.
 
+If the integration uses the [embedded UPI checkout (pay-bar)](#embedded-upi-checkout-pay-bar), also verify:
+
+14. On an Android device with at least one UPI app installed, confirm the "PAY USING" selector renders next to the CTA and lists the detected apps.
+15. Pick a different app in the drawer and confirm a `checkout_app_selected` analytics event is tracked.
+16. Tap the CTA and confirm `onCTA` receives `checkout.paymentApp` with the picked app's `id`, `name`, and `packageName`, and that `cta_click` carries `payment_app`.
+17. Cancel or fail the UPI mandate and confirm the paywall stays up (`dismissOnCTA: false`) and the CTA can be tapped again.
+18. Authorize a test mandate and confirm `reportConversion()` runs only after backend verification, then `result.dismiss()` closes the paywall.
+19. On iOS, confirm the plain full-width CTA renders and the Standard Checkout fallback starts from `onCTA`.
+20. On an Android device or emulator with zero UPI apps, confirm the plain CTA renders and the classic billing flow runs.
+21. Set `checkout.ui.enabled: false` in the dashboard, call `await refreshConfig()`, and confirm the plain CTA returns and `cta_click` carries no `payment_app`.
+
 ### Step 13: AI Agent Acceptance Criteria
 
 If Claude, Codex, Cursor, or another coding agent implements this SDK, the task is done only when:
@@ -344,6 +355,266 @@ If Claude, Codex, Cursor, or another coding agent implements this SDK, the task 
 10. `reportConversion()` is called only after billing succeeds.
 11. No hardcoded paywall UI is added to the host app.
 12. The integration has a manual QA path that proves the remote paywall renders, opens the right billing product, and falls back safely.
+
+## Embedded UPI checkout (pay-bar)
+
+Available from `@tranzmit/react-native` 0.4.0 (`@tranzmit/shared` 0.4.0).
+
+The pay-bar is an optional band inside the hosted paywall document: a "PAY USING \<app\>" selector next to the primary CTA that lists the UPI apps installed on the user's device. The host app detects the installed apps and passes them to the SDK; the SDK injects the detected-app list into the WebView; when the user taps the CTA, the SDK returns the user's chosen app to the host app as a second `onCTA` argument.
+
+The billing boundary from [Step 9](#step-9-keep-billing-in-the-host-app) is unchanged:
+
+1. Tranzmit never processes purchases. The SDK never bundles Razorpay.
+2. Tranzmit owns the selector UI, experimentation, and analytics.
+3. The host app owns UPI app detection, the mandate/payment flow, backend verification, and entitlements.
+4. The WebView never receives a `packageName` field and can never open apps. The injected list is `{ id, name }` only; the six registry apps are identified by a Tranzmit alias id, while a non-registry app is identified by its package name as its id. The document can only echo an id back; the SDK resolves it natively. Every payment action runs in the host app's native code.
+
+### Android-only, with an iOS fallback
+
+The in-paywall app selector and direct mandate flow are **Android-only**. Razorpay does not support UPI Autopay intent through Custom Checkout or server-to-server integration on iOS for any UPI app.
+
+On iOS the pay-bar degrades to the plain full-width CTA automatically. For iOS subscriptions, run Razorpay Standard Checkout with a `subscription_id` via `react-native-razorpay` inside `onCTA`. Note the open issue [razorpay/react-native-razorpay#506](https://github.com/razorpay/react-native-razorpay/issues/506): opening Standard Checkout with a `subscription_id` on iOS can leave a white screen on close — QA the close path explicitly. Subscriptions-product UPI (`plan`/`subscription_id`) is early access at Razorpay, and its only documented client path is Standard Checkout.
+
+Do not build a UPI Collect fallback: UPI Collect is deprecated for new Autopay registrations since 28 Feb 2026.
+
+### Integration steps
+
+**Prerequisite:** have Tranzmit configure `spec.checkout` on the paywall variant(s) in the dashboard — its presence is the master opt-in. Without it the pay-bar never renders and `onCTA`'s second argument is `undefined` (see the [`spec.checkout` dashboard reference](#speccheckout-dashboard-reference)).
+
+1. **Install `react-native-customui` in your app.** This is Razorpay's custom-checkout React Native package, and it belongs in the customer app; the Tranzmit SDK never depends on it. Its Android artifact ships the `<queries>` UPI intent block, so no host manifest edit is needed for app detection. It is a native module: Expo apps need a development client / prebuild. If the app also ships the [iOS subscription fallback](#android-only-with-an-ios-fallback), additionally install `react-native-razorpay` in the customer app (also never in the SDK).
+2. **Detect installed UPI apps** on Android with `Razorpay.getAppsWhichSupportUPI(cb)` and map each detected entry to `CheckoutAppInput { packageName, name }`. Do not pass detected apps on iOS.
+3. **Pass the list as `checkoutApps` to `TranzmitProvider`.** The SDK sanitizes it once (see [App list sanitization](#app-list-sanitization)).
+4. **Call `gate()` with `dismissOnCTA: false`** and the widened `onCTA(product, checkout)`. `checkout.paymentApp` is the user's selected app (`{ id, name, packageName }`); `checkout.provider` is the dashboard-configured passthrough config, delivered verbatim.
+5. **Run the Razorpay charge-at-will mandate flow** from `onCTA` (see [the mandate flow](#razorpay-charge-at-will-mandate-flow)).
+6. **On success, call `reportConversion()` then `result.dismiss()`. On failure, return without dismissing.** The paywall stays up so the user can retry — that is why `dismissOnCTA: false` exists.
+
+The types involved:
+
+```ts
+// Host app → TranzmitProvider:
+interface CheckoutAppInput {
+  packageName: string; // Android package name from detection
+  name?: string;       // device-reported display label
+  id?: string;
+}
+
+// SDK → host app, inside CheckoutContext:
+interface ResolvedCheckoutApp {
+  id: string;          // registry id (e.g. "phonepe") or the package name for unknown apps
+  name: string;
+  packageName: string;
+}
+
+// Second onCTA argument. undefined exactly when the variant has no spec.checkout.
+interface CheckoutContext {
+  paymentApp?: ResolvedCheckoutApp;   // undefined when no app was selected/resolved
+  provider?: Record<string, unknown>; // spec.checkout.provider, verbatim
+}
+```
+
+### Complete example
+
+Provider wiring:
+
+```tsx
+import { useEffect, useState } from "react";
+import { Platform } from "react-native";
+import Razorpay from "react-native-customui";
+import { TranzmitProvider, type CheckoutAppInput } from "@tranzmit/react-native";
+
+export default function App() {
+  const currentUser = useCurrentUserOrNull();
+  const [checkoutApps, setCheckoutApps] = useState<CheckoutAppInput[]>([]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return; // the pay-bar is Android-only
+    Razorpay.getAppsWhichSupportUPI((apps) => {
+      setCheckoutApps(
+        apps.map((app) => ({
+          packageName: app.packageName,
+          name: app.appName,
+        }))
+      );
+    });
+  }, []);
+
+  return (
+    <TranzmitProvider
+      publicKey="pk_live_REPLACE_WITH_CUSTOMER_PUBLIC_KEY"
+      userId={currentUser?.id}
+      checkoutApps={checkoutApps}
+      onError={(error) => console.warn("[Tranzmit]", error)}
+    >
+      <RootNavigator />
+    </TranzmitProvider>
+  );
+}
+```
+
+Gate handler:
+
+```tsx
+import { Button } from "react-native";
+import { useTranzmit } from "@tranzmit/react-native";
+
+function UpgradeButton() {
+  const { gate, reportConversion } = useTranzmit();
+
+  return (
+    <Button
+      title="Upgrade"
+      onPress={() => {
+        const result = gate("upgrade_pro", {
+          dismissOnCTA: false, // keep the paywall up until the mandate succeeds
+          onCTA: async (product, checkout) => {
+            if (!checkout) {
+              // The variant has no spec.checkout: run the classic Step 9 flow,
+              // then dismiss manually because dismissOnCTA is false.
+              const success = await purchaseProduct(product.id);
+              if (!success) return;
+              reportConversion({
+                trigger: "upgrade_pro",
+                variantId: result.variantId,
+                productId: product.id,
+                revenue: 999,
+                currency: "INR",
+              });
+              result.dismiss();
+              return;
+            }
+
+            // checkout.paymentApp: the user's selected UPI app
+            //   ({ id, name, packageName }), or undefined on iOS, with zero
+            //   detected apps, or with checkout.ui.enabled: false. On iOS,
+            //   run Razorpay Standard Checkout with a subscription_id here.
+            // checkout.provider: the dashboard-configured passthrough config,
+            //   delivered verbatim. Validate before use (see Security notes).
+            const authorized = await startUpiAutopayMandate(product.id, checkout);
+            if (!authorized) {
+              return; // Mandate failed or abandoned. The paywall stays up for retry.
+            }
+
+            reportConversion({
+              trigger: "upgrade_pro",
+              variantId: result.variantId,
+              productId: product.id,
+              revenue: 1, // the captured ₹1 authorization charge
+              currency: "INR",
+            });
+            result.dismiss(); // Host-driven dismissal replaces the automatic one.
+          },
+          onFallback: (event) => {
+            console.warn("Tranzmit fallback", event.reason);
+            openExistingInAppPaywall();
+          },
+        });
+      }}
+    />
+  );
+}
+```
+
+`startUpiAutopayMandate(product.id, checkout)` is host-app code. Implement it with the mandate flow below and return `true` only after your backend verifies the authorization.
+
+### Razorpay charge-at-will mandate flow
+
+The recommended server model is token-based recurring — "charge-at-will" (CAW) — which Razorpay officially supports for custom UIs:
+
+1. `POST /v1/customers` — create or look up the Razorpay customer.
+2. `POST /v1/orders` with `token: { max_amount, frequency, expire_at }`. Keep `max_amount` at or below ₹15,000 so subsequent debits need no additional factor auth (UPI PIN).
+3. `POST /v1/payments/create/upi` with `recurring: "1"` and `upi: { flow: "intent" }`. The response contains an intent link that launches the user's UPI app.
+4. The ₹1 authorization charge is **captured** — that is the "₹1 today" trial charge. Your backend then schedules each recurring debit, with the mandatory 24-hour pre-debit notification.
+5. Verify the payment on your backend before treating the mandate as authorized and calling `reportConversion()`.
+
+Client-side alternative: after your backend creates the order, open the payment directly with `react-native-customui`, routing to the app the user picked in the pay-bar:
+
+```tsx
+Razorpay.open({
+  key_id: RAZORPAY_KEY_ID,
+  amount: amountInPaise,
+  currency: "INR",
+  method: "upi",
+  upi_app_package_name: checkout.paymentApp.packageName,
+  "_[flow]": "intent",
+  // order_id and customer fields from your backend
+});
+```
+
+Go-live for recurring involves a Razorpay support touchpoint per merchant account. Confirm the account is enabled for token-based recurring before shipping.
+
+### `spec.checkout` dashboard reference
+
+`spec.checkout` is configured per paywall variant in the Tranzmit dashboard. Its presence is the master opt-in: without it, the SDK injects an empty object into the WebView and `onCTA` keeps the exact legacy single-argument behavior.
+
+`checkout.provider` is an opaque JSON object passed verbatim to the host app as `checkout.provider` on CTA. The SDK never interprets it and never injects it into the WebView. Typical use: Razorpay key id, plan reference, mandate cap, order endpoint. Do not put secrets in it — it is delivered to the client.
+
+`checkout.ui` controls the in-document bar:
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `enabled` | boolean | `true` | `false`: the SDK injects `{}` into the WebView and strips `paymentApp` from `cta` messages. The document renders the plain CTA. |
+| `showToggle` | boolean | `true` | `false`: the document renders plain CTA visuals with no selector, but the resolved default app is still attached to the `cta` message silently. |
+| `appPriority` | string[] | device order | Ordered app ids. Max 32 entries; each must match `^[A-Za-z0-9._-]{1,64}$` (violating entries are dropped, not truncated). |
+| `defaultApp` | string | unset | Preselected app id. Selection resolution: `defaultApp` → first `appPriority` match → first detected app. |
+| `maxVisibleApps` | number | `5` | Drawer rows before internal scrolling. A finite integer ≥ 1 is clamped to 1..12; any other value falls back to the default 5. |
+| `iconStyle` | `"tile"` \| `"circle"` | `"tile"` | Icon frame shape for app glyphs. |
+| `fallbackToPlainCta` | boolean | `true` | `false`: with zero detected apps the document renders an inert generic-UPI badge instead of the plain CTA, keeping the band height stable. |
+
+All `checkout.ui` fields are config data delivered outside the document integrity hash: dashboard edits apply without re-hashing or redeploying the document.
+
+### Known-app registry
+
+The SDK maps detected package names to a fixed registry of app ids. Use these ids in `checkout.ui.appPriority` and `checkout.ui.defaultApp`:
+
+| Android package | App id | Display name |
+|---|---|---|
+| `net.one97.paytm` | `paytm` | Paytm |
+| `com.phonepe.app` | `phonepe` | PhonePe |
+| `com.google.android.apps.nbu.paisa.user` | `gpay` | Google Pay |
+| `in.org.npci.upiapp` | `bhim` | BHIM |
+| `in.amazon.mShop.android.shopping` | `amazonpay` | Amazon Pay |
+| `com.dreamplug.androidapp` | `cred` | CRED |
+
+Any other detected app keeps its package name as its id and its device-reported label as its display name, and renders with a generic UPI glyph.
+
+### App list sanitization
+
+The SDK sanitizes `checkoutApps` once, before anything reaches the WebView:
+
+1. At most 16 entries are kept.
+2. A known package name maps to its registry id and registry display name; the device-reported name is ignored.
+3. An unknown package name must match `^[A-Za-z0-9._-]{1,64}$` or the entry is dropped; its id is the package name. An unknown package name that equals one of the six registry ids (for example a bare `paytm`) is dropped — real Android package names contain a dot.
+4. Device-reported names for unknown apps are sanitized: C0/C1 control characters and every Unicode format character (category `Cf` — bidi controls, zero-width characters, soft hyphens, and similar invisibles) are stripped, whitespace is collapsed and trimmed, and the result is capped at 48 characters (never splitting a surrogate pair). A name that is empty after sanitizing drops the entry.
+5. Anti-spoofing: an unknown app whose sanitized name — lowercased with all whitespace removed — equals a registry display name (paytm, phonepe, googlepay, bhim, amazonpay, cred) is dropped entirely.
+6. Duplicate ids are deduplicated; the first entry wins.
+
+### Fallback matrix
+
+The second `onCTA` argument is `undefined` only when `spec.checkout` is absent from the variant. In every other degraded row the host still receives a `CheckoutContext` (with the `provider` passthrough); only `paymentApp` is missing.
+
+| Condition | Paywall renders | `onCTA` second argument |
+|---|---|---|
+| Old SDK (< 0.4.0) + pay-bar document | Plain full-width CTA (the document defaults to plain until the SDK activates it) | Not passed (old one-argument signature) |
+| New SDK + old document (no pay-bar markup) | Unchanged | `CheckoutContext` without `paymentApp` when the variant sets `spec.checkout`; `undefined` otherwise |
+| `spec.checkout` absent on the variant | Plain CTA | `undefined` — exact legacy behavior |
+| `checkout.ui.enabled: false` | Plain CTA; the SDK injects `{}` and strips `paymentApp` from `cta` messages | `CheckoutContext` with `paymentApp` undefined |
+| Zero UPI apps detected, or `checkoutApps` not passed | Plain CTA (inert generic-UPI badge instead if `fallbackToPlainCta: false`) | `CheckoutContext` with `paymentApp` undefined |
+| iOS | Plain CTA | `CheckoutContext` with `paymentApp` undefined |
+| `checkout.ui.showToggle: false` | Plain CTA visuals, no selector | `CheckoutContext` with the silently resolved default app in `paymentApp` |
+
+### Analytics
+
+The paywall impression is still tracked once per `gate()`. Two things change:
+
+1. `cta_click` now carries `payment_app` — the resolved app id — when the CTA included a selected app. With `dismissOnCTA: false`, each CTA attempt tracks its own `cta_click`.
+2. New `checkout_app_selected` event, tracked whenever the user picks an app in the drawer. Its `app` property is the registry id for the six known apps; any other app is reported as `"other"`.
+
+### Security notes
+
+1. **`checkout.provider` is untrusted input.** It is delivered on the config channel, outside the document integrity hash. Host apps MUST validate every URL-valued field (for example an order endpoint) against an allowlist compiled into the app binary before using it. Never eval it, and never interpolate its values into native UI templates. On the dashboard side, never put secrets in it — it is delivered to the client.
+2. **The WebView never receives a `packageName` field.** The injected list contains only `{ id, name }` pairs — for the six registry apps the id is a Tranzmit alias, while a non-registry app is identified by its package name as its id. The document echoes an app id back on the `cta` message; the SDK resolves it natively against the sanitized list, a forged or unknown id resolves to no `paymentApp`, and the WebView can never open apps.
+3. **The WebView can never open apps.** Intent launches, mandate creation, and every Razorpay call run in the host app's native code. As in [Paywall Security](#paywall-security), hosted paywalls must not navigate to checkout pages.
+4. The document authoring contract for pay-bar paywalls lives in `templates/paybar/`.
 
 ## API Reference
 
@@ -371,6 +642,7 @@ If Claude, Codex, Cursor, or another coding agent implements this SDK, the task 
 | `identifiers` | no | Extra stable IDs, such as `accountID` or `companyID`. |
 | `userTraits` | no | Non-sensitive analytics/targeting traits. |
 | `privateTraits` | no | Private traits sent to Tranzmit but not intended for client-side display. |
+| `checkoutApps` | no | Detected UPI apps (`CheckoutAppInput[]`) for the [embedded UPI checkout (pay-bar)](#embedded-upi-checkout-pay-bar). Android-only; omit or pass `[]` on iOS. |
 | `apiBaseUrl` | no | Override only when Tranzmit gives you a custom API URL. |
 | `onError` | no | Receives SDK config/network errors. |
 | `debug` | no | Enables SDK debug metadata/logging where supported. |
@@ -445,10 +717,11 @@ function UpgradeScreen() {
 ```tsx
 const result = gate("upgrade_pro", {
   presentation: "sheet",
-  onCTA: (product) => {},
+  onCTA: (product, checkout) => {},
   onDismiss: () => {},
   onFallback: (event) => {},
   onImpression: () => {},
+  dismissOnCTA: true,
 });
 ```
 
@@ -458,17 +731,18 @@ const result = gate("upgrade_pro", {
 |---|---|
 | `shown` | `true` when the Tranzmit paywall opened. `false` when fallback was used. |
 | `variantId` | Assigned variant ID when available. |
-| `dismiss()` | Dismisses the active provider-driven paywall. In the current RN `gate()` CTA flow the SDK already dismisses before `onCTA`, so this is mainly useful for host-driven cancellation or duplicate cleanup. |
+| `dismiss()` | Dismisses the active provider-driven paywall. In the default `gate()` CTA flow the SDK already dismisses before `onCTA`, so this is mainly useful for host-driven cancellation or duplicate cleanup. With `dismissOnCTA: false`, call this after checkout succeeds. |
 
 `GateOptions`:
 
 | Option | Description |
 |---|---|
-| `onCTA(product)` | Called when the hosted paywall CTA is tapped. Start billing here. |
+| `onCTA(product, checkout?)` | Called when the hosted paywall CTA is tapped. Start billing here. `checkout` is a [`CheckoutContext`](#embedded-upi-checkout-pay-bar) when the variant configures `spec.checkout`; `undefined` otherwise. |
 | `onDismiss()` | Called when the user dismisses the paywall. |
 | `onFallback(event)` | Called when Tranzmit cannot show the paywall. Open the existing app paywall here. |
 | `onImpression()` | Called after the paywall impression is tracked. |
 | `presentation` | Optional local override: `sheet`, `modal`, `fullscreen`, or `inline`. |
+| `dismissOnCTA` | Optional, default `true`: the SDK dismisses the paywall before `onCTA` runs (existing behavior). Set `false` to keep the paywall up through `onCTA` — required for the [pay-bar mandate flow](#embedded-upi-checkout-pay-bar) — then dismiss with `result.dismiss()` after success. |
 
 ### `ProductSpec`
 

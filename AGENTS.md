@@ -213,6 +213,44 @@ The task is done only when:
 12. The integration has a manual QA path that proves the remote paywall renders, opens the right billing product, shows billing-provider-authoritative checkout terms, and falls back safely.
 13. Hosted paywalls have config-side SHA-256 integrity metadata and fail closed if validation fails.
 
+## Pay-Bar Runbook: Embedded UPI Checkout
+
+Use this runbook when the task is wiring the embedded UPI checkout ("pay-bar") into a customer app. It requires `@tranzmit/react-native` 0.4.0 and `@tranzmit/shared` 0.4.0. The full customer documentation is the README section "Embedded UPI checkout (pay-bar)"; this is the condensed agent path. Document-side work (selector markup, tokens, icons) is governed by the authoring contract in `templates/paybar/` (`CONTRACT.md` is normative; `AUTHORING.md` is the author guide) — this runbook covers only the host-app integration.
+
+The boundary is unchanged: the SDK renders the selector inside the hosted document and reports the chosen app; the customer app executes the Razorpay flow. Never add Razorpay dependencies to the SDK packages.
+
+### Pay-Bar Step 1: Confirm Inputs
+
+Ask the human or project owner for:
+
+1. Razorpay account state: whether token-based recurring ("charge-at-will") is enabled on the merchant account. Go-live for recurring involves a Razorpay support touchpoint per merchant account. If unconfirmed, stop and ask.
+2. The Razorpay `key_id`, and which backend endpoints implement the mandate flow (customer create, order with `token{}`, recurring UPI payment).
+3. Whether `spec.checkout` is configured on the paywall variant(s) in the Tranzmit dashboard. If it is not, `onCTA` receives `undefined` as its second argument and the pay-bar never renders. Stop and ask for the dashboard config.
+4. Whether the app is Expo-managed. `react-native-customui` is a native module: Expo apps need a development client / prebuild.
+
+### Pay-Bar Step 2: Integrate
+
+1. Install `react-native-customui` in the customer app, never in this SDK. Its Android artifact ships the `<queries>` UPI intent block, so no host manifest edit is needed for detection.
+2. On Android, detect apps with `Razorpay.getAppsWhichSupportUPI(cb)` and map each entry to `CheckoutAppInput { packageName, name }`. Do not pass detected apps on iOS.
+3. Pass the list as `checkoutApps` on `TranzmitProvider`.
+4. Call `gate()` with `dismissOnCTA: false` and `onCTA: async (product, checkout) => { ... }`.
+5. When `checkout?.paymentApp` is present, run the Razorpay charge-at-will mandate flow. Backend: `POST /v1/customers`, then `POST /v1/orders` with `token: { max_amount, frequency, expire_at }` (keep `max_amount` at or below ₹15,000 so subsequent debits need no additional factor auth), then `POST /v1/payments/create/upi` with `recurring: "1"` and `upi: { flow: "intent" }` — the response contains an intent link. Client-side alternative: `Razorpay.open({ key_id, amount, currency, method: "upi", upi_app_package_name: checkout.paymentApp.packageName, "_[flow]": "intent", ... })`. The ₹1 authorization charge is captured — that is the "₹1 today" trial charge; the backend then schedules each recurring debit with the 24-hour pre-debit notification.
+6. On success: `reportConversion()` only after backend verification, then `result.dismiss()`. On failure or abandonment: return without dismissing; the paywall stays up for retry.
+7. On iOS: run Razorpay Standard Checkout with a `subscription_id` via `react-native-razorpay` from `onCTA`. QA the close path — open issue razorpay/react-native-razorpay#506 reports a white screen on close with `subscription_id` on iOS.
+8. Do not build a UPI Collect fallback. UPI Collect is deprecated for new Autopay registrations since 28 Feb 2026.
+9. Treat `checkout.provider` as untrusted input: validate every URL-valued field against an allowlist compiled into the app binary before use.
+
+### Pay-Bar Step 3: Acceptance Criteria
+
+The pay-bar task is done only when:
+
+1. The paywall stays up through a failed or abandoned mandate (`dismissOnCTA: false`) and the CTA can be retried without re-gating.
+2. `reportConversion()` is called only after the mandate is authorized and verified on the backend, never on intent launch.
+3. The plain-CTA fallback is verified on iOS and on an Android device with zero UPI apps, and the classic `onCTA` billing path still works there.
+4. `cta_click` carries `payment_app` when an app was selected, and `checkout_app_selected` events are tracked (non-registry apps report as `"other"`).
+5. `react-native-customui` is a dependency of the customer app only; nothing Razorpay-related was added to the SDK packages.
+6. No pay-bar UI is hardcoded in the host app; the selector is document content delivered by Tranzmit.
+
 ## Product Rules
 
 - Tranzmit does not process purchases.

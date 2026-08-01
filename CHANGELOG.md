@@ -2,6 +2,24 @@
 
 All notable changes to the Tranzmit React Native SDK packages (`@tranzmit/react-native`, `@tranzmit/shared`) are documented here. Dates are UTC and correspond to the npm publish time.
 
+## [react-native 0.4.0, shared 0.4.0] - 2026-07-29
+
+### Added
+
+- **Embedded UPI checkout ("pay-bar").** Hosted paywall documents can render a "PAY USING \<app\>" selector next to the CTA, listing the UPI apps installed on the device. The host app detects the apps and passes them in; the SDK injects the sanitized list into the WebView and returns the user's choice to the host on CTA. Android-only; on iOS, with zero detected apps, or with checkout disabled, the document renders the existing plain full-width CTA. The billing boundary is unchanged: the host app executes payment and the SDK never bundles Razorpay. See the README section "Embedded UPI checkout (pay-bar)".
+- `checkoutApps` prop on `TranzmitProvider`: detected UPI apps as `CheckoutAppInput[]` (`{ packageName, name?, id? }`). Sanitized once: max 16 entries, known package names mapped to a six-app registry (Paytm, PhonePe, Google Pay, BHIM, Amazon Pay, CRED), untrusted device-reported names stripped of C0/C1 control characters and all Unicode format characters (category `Cf`: bidi controls, zero-width characters, soft hyphens, BOM) and capped at 48 characters without splitting a surrogate pair, brand-spoofing entries dropped, unknown package names colliding with a registry id dropped, deduplicated by id.
+- `spec.checkout` on `PaywallSpec` (new `CheckoutSpec` / `CheckoutUiConfig` types in `@tranzmit/shared`; additive, `bridge.version` stays 1): an opaque `provider` object passed verbatim to the host on CTA (never injected into the WebView) and a `ui` block (`enabled`, `showToggle`, `appPriority`, `defaultApp`, `maxVisibleApps`, `iconStyle`, `fallbackToPlainCta`) delivered outside the document integrity hash, so dashboard edits apply without re-hashing the document.
+- `onCTA` gains an optional second argument on every surface (`GateOptions`, `PaywallHost`, `TranzmitPaywall`): `CheckoutContext { paymentApp?: { id, name, packageName }, provider? }`. It is `undefined` exactly when the variant has no `spec.checkout`.
+- `GateOptions.dismissOnCTA` (default `true`). Set `false` to keep the paywall up through `onCTA` so a failed UPI mandate can be retried; dismiss with `result.dismiss()` after success.
+- Analytics: `cta_click` now carries `payment_app` when the CTA included a selected app; new `checkout_app_selected` event whose `app` property is the registry id, or `"other"` for non-registry apps. The impression is still tracked once per `gate()`; each CTA attempt tracks its own `cta_click`.
+- `templates/paybar/` authoring artifacts: the pay-bar markup, base CSS, and document JS contract for hosted documents.
+
+### Backward compatibility
+
+- The `onCTA` widening is an optional argument: existing one-argument callbacks compile and run unchanged, and the second argument stays `undefined` until a variant configures `spec.checkout`.
+- Default lifecycle is unchanged: without `dismissOnCTA: false`, the SDK still dismisses the paywall before `onCTA` runs.
+- Old documents render unchanged on the new SDK. New pay-bar documents degrade to the plain CTA on old SDKs (no injection, so the selector never activates). `bridge.version` stays 1, so no placement falls back with `unsupported_version`.
+
 ## [react-native 0.3.1, shared 0.3.1] - 2026-07-11
 
 ### Fixed

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { PlacementConfig, ProductSpec } from "@tranzmit/shared";
+import type { CheckoutAppInput, CheckoutContext, ResolvedCheckoutApp } from "./checkout.js";
 
 export type PresentationMode = "modal" | "sheet" | "fullscreen" | "inline";
 export type FallbackReason =
@@ -29,17 +30,30 @@ export interface TranzmitProviderProps {
    * used.
    */
   locale?: string;
+  /**
+   * Installed UPI payment apps reported by the host app (the SDK cannot query
+   * package visibility itself). Sanitized once; the WebView only ever sees
+   * `{ id, name }` pairs — never a `packageName` field. Registry apps get a
+   * Tranzmit alias id; a non-registry app is identified by its package name
+   * as its id.
+   */
+  checkoutApps?: CheckoutAppInput[];
   onError?: (error: Error) => void;
   debug?: boolean;
   children: ReactNode;
 }
 
 export interface GateOptions {
-  onCTA?: (product: ProductSpec) => void;
+  onCTA?: (product: ProductSpec, checkout?: CheckoutContext) => void;
   onDismiss?: () => void;
   onFallback?: (event: FallbackEvent) => void;
   onImpression?: () => void;
   presentation?: PresentationMode;
+  /**
+   * Default true. When false the paywall stays up after a CTA (a failed UPI
+   * mandate must not strand the user); the host dismisses via the gate result.
+   */
+  dismissOnCTA?: boolean;
 }
 
 export interface PreloadPlacementOptions {
@@ -86,6 +100,7 @@ export interface TranzmitContextValue {
   ready: boolean;
   user?: PaywallUserContext;
   locale?: string;
+  checkoutApps?: ResolvedCheckoutApp[];
   gate: (trigger: string, options?: GateOptions) => GateResult;
   preloadPlacement: (trigger: string, options?: PreloadPlacementOptions) => Promise<PreloadResult>;
   track: (event: string, properties?: Record<string, unknown>) => void;

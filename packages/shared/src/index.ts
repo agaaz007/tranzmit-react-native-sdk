@@ -3,6 +3,8 @@ export type {
   ProductSpec,
   AssetManifest,
   PaywallLocalization,
+  CheckoutSpec,
+  CheckoutUiConfig,
 } from "./spec.js";
 
 export {

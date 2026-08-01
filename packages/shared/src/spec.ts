@@ -74,6 +74,40 @@ export interface WebViewSecuritySpec {
   externalUrlSchemes?: string[];
 }
 
+export interface CheckoutUiConfig {
+  /**
+   * Default true. When false the SDK injects an empty checkout runtime into
+   * the WebView and strips `paymentApp` from incoming cta messages.
+   */
+  enabled?: boolean;
+  /**
+   * Default true. When false the document renders plain CTA visuals while the
+   * resolved default app is still attached to cta messages silently.
+   */
+  showToggle?: boolean;
+  /** Ordered app ids (max 32, `^[A-Za-z0-9._-]{1,64}$` each; violations dropped). */
+  appPriority?: string[];
+  /** Selection resolution: defaultApp -> first appPriority match -> first detected. */
+  defaultApp?: string;
+  /** Finite integer >= 1 clamped to 1..12; anything else defaults to 5. */
+  maxVisibleApps?: number;
+  iconStyle?: "tile" | "circle";
+  /**
+   * Default true. When false the document renders an inert generic-UPI badge
+   * when no apps are detected, keeping the pay-bar band height stable.
+   */
+  fallbackToPlainCta?: boolean;
+}
+
+export interface CheckoutSpec {
+  /**
+   * Opaque provider payload. Never injected into the WebView; passed verbatim
+   * to the host app as `checkoutContext.provider`.
+   */
+  provider?: Record<string, unknown>;
+  ui?: CheckoutUiConfig;
+}
+
 export type PaywallPresentationMode = "sheet" | "modal" | "fullscreen" | "inline";
 
 export interface PaywallDesignBreakpoint {
@@ -117,6 +151,7 @@ export interface PaywallSpec {
   document?: WebViewDocumentSpec;
   bridge?: WebViewBridgeSpec;
   security?: WebViewSecuritySpec;
+  checkout?: CheckoutSpec;
   header?: {
     title: string;
     subtitle?: string;

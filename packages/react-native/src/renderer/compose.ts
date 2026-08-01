@@ -47,6 +47,9 @@ export function renderDocument(
   user?: PaywallUserContext,
   locale?: string,
   options?: RenderOptions,
+  // Fully-computed checkout runtime (apps stripped to id+name, platform string
+  // resolved by the caller) so this module stays free of react-native imports.
+  checkout?: object,
 ) {
   const flattenArtboards = options?.flattenArtboards ?? true;
   const document = spec.document || legacyDocument(spec);
@@ -56,6 +59,7 @@ export function renderDocument(
   const viewportJson = JSON.stringify(resolvedViewport).replace(/</g, "\\u003c");
   const sanitizedUser = sanitizeUserContext(user);
   const userJson = JSON.stringify(sanitizedUser).replace(/</g, "\\u003c");
+  const checkoutJson = JSON.stringify(checkout || {}).replace(/</g, "\\u003c");
   const localizedHtml = localizeHtml(document.html || "", resolveLocalizedStrings(spec.localization, locale));
   const documentHtml = bakePersonalizedSources(localizedHtml, sanitizedUser);
   const viewportCss = viewportCssVariables(resolvedViewport);
@@ -216,6 +220,7 @@ ${documentHtml}
 ${js}
 <script>window.TranzmitNativeViewport = ${viewportJson};</script>
 <script>window.TranzmitUser = ${userJson};</script>
+<script>window.TranzmitCheckout = ${checkoutJson};</script>
 <script>
 (function(){
   var viewport = window.TranzmitNativeViewport || null;
@@ -248,6 +253,7 @@ ${js}
   window.Tranzmit = {
     viewport: viewport,
     user: user,
+    checkout: window.TranzmitCheckout || {},
     post: post,
     fillTemplate: fillTemplate,
     cta: function(productId){ post({ type: 'cta', productId: productId }); },

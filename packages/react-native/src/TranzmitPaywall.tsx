@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { PaywallSpec, ProductSpec } from "@tranzmit/shared";
+import { checkoutAnalyticsAppId, type CheckoutContext } from "./checkout.js";
 import { SpecRenderer } from "./renderer/SpecRenderer.js";
 import { ModalPresenter } from "./presentation/ModalPresenter.js";
 import { SheetPresenter } from "./presentation/SheetPresenter.js";
@@ -12,7 +13,7 @@ export interface TranzmitPaywallProps {
   variantId?: string;
   visible: boolean;
   presentation?: PresentationMode;
-  onCTA?: (product: ProductSpec) => void;
+  onCTA?: (product: ProductSpec, checkout?: CheckoutContext) => void;
   onDismiss?: () => void;
   onError?: (error: Error) => void;
   onImpression?: () => void;
@@ -29,7 +30,7 @@ export function TranzmitPaywall({
   onError,
   onImpression,
 }: TranzmitPaywallProps) {
-  const { getPlacement, track, user, locale } = useTranzmit();
+  const { getPlacement, track, user, locale, checkoutApps } = useTranzmit();
   const placement = trigger ? getPlacement(trigger) : null;
   const resolvedSpec = spec || placement?.spec;
   const resolvedTrigger = trigger || "dynamic_spec";
@@ -62,14 +63,24 @@ export function TranzmitPaywall({
         spec={resolvedSpec}
         user={user}
         locale={locale}
+        checkoutApps={checkoutApps}
         presentation={presentation || presentationFromSpec(resolvedSpec)}
-        onCTA={(product) => {
+        onCTA={(product, checkout) => {
           track("cta_click", {
             trigger: resolvedTrigger,
             variantId: resolvedVariantId,
             productId: product.id,
+            ...(checkout?.paymentApp ? { payment_app: checkout.paymentApp.id } : {}),
           });
-          onCTA?.(product);
+          if (checkout) onCTA?.(product, checkout);
+          else onCTA?.(product);
+        }}
+        onCheckoutAppSelected={(appId) => {
+          track("checkout_app_selected", {
+            trigger: resolvedTrigger,
+            variantId: resolvedVariantId,
+            app: checkoutAnalyticsAppId(appId),
+          });
         }}
         onDismiss={() => {
           handleDismiss();
@@ -77,7 +88,7 @@ export function TranzmitPaywall({
         onError={onError}
       />
     );
-  }, [handleDismiss, locale, onCTA, onError, presentation, resolvedSpec, resolvedTrigger, resolvedVariantId, track, user]);
+  }, [checkoutApps, handleDismiss, locale, onCTA, onError, presentation, resolvedSpec, resolvedTrigger, resolvedVariantId, track, user]);
 
   if (!visible || !resolvedSpec || !content) return null;
   const resolvedPresentation = presentation || presentationFromSpec(resolvedSpec);
